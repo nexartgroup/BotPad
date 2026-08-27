@@ -1,0 +1,13 @@
+## Interface: 30300
+## Title: Botpad
+## Notes: Minimales Bedienfeld fuer den Playerbot-Selbstmodus und Teleport zum Carbonite-Ziel.
+## Author: -
+## Version: 1.0
+## SavedVariablesPerCharacter: BotpadDB
+## OptionalDeps: Carbonite
+## X-Requires-Server-Module: mod-autotravel
+BP_Carbonite.lua
+BP_MapIds.lua
+BP_Bot.lua
+BP_Core.lua
+BP_UI.lua
