@@ -16,12 +16,16 @@
 Botpad = Botpad or {}
 local BP = Botpad
 
-BP.VERSION = "1.0"
+BP.VERSION = "1.1"
 local PREFIX = "|cff5ab0e8Botpad|r: "
 
 local DEFAULTS = {
    Mode         = "normal",
-   SelfCommand  = ".playerbot bot self",
+   -- mod-playerbots registriert "playerbots" (Mehrzahl). AzerothCore erkennt nur
+   -- den vollen Namen -- ".playerbot" ist ein unbekannter Befehl ("Es gibt keinen
+   -- solchen Befehl", bei AllowPlayerCommands = 0 sogar Text in /sagen). Der
+   -- Befehl ist ein Umschalter.
+   SelfCommand  = ".playerbots bot self",
    HideCommands = 1,
    ResetOnStop  = 1,
    ConfirmTp    = 1,
@@ -81,22 +85,118 @@ end
 
 local lastReply = 0
 
-local function DoTeleport()
-   local args, nameOrErr = BuildArgs()
-   if not args then BP.Warn(nameOrErr) return end
+-- ---------------------------------------------------------------------------
+-- Handschlag mit dem Servermodul
+-- ---------------------------------------------------------------------------
+--
+-- ".at tp" geht erst hinaus, wenn das Modul sich gemeldet hat. Ohne das Modul
+-- antwortet AzerothCore mit "Es gibt keinen solchen Befehl"; auf Servern mit
+-- AllowPlayerCommands = 0 (nicht Standard) behandelt der Core den Befehl sogar als
+-- gewoehnlichen Text (ChatHandler::_ParseCommands), und der Charakter riefe die
+-- Koordinaten in /sagen. Fruehere Fassungen sendeten den Befehl blind und warnten
+-- erst fuenf Sekunden spaeter. Der Handschlag liefert ausserdem die
+-- Berechtigungen dieses Spielers.
+--
+-- Antwort: [AT]H|<version>|<aktiv>|<knoten>|<flug>|<afk>|<protokoll>|<rechte>|<faehigkeiten>
+-- Faehigkeit 8 = ".at tp" ist fuer diesen Spieler erlaubt.
+
+BP.srv = { state = "UNKNOWN", version = "?", proto = 0, sec = 0, caps = 0, capsKnown = false }
+
+local CAP_TELEPORT = 8
+local HELLO_TIMEOUT = 5
+local pendingTp = nil       -- { args, name, at } wartet auf die Antwort
+
+local function TeleportAllowed()
+   if not BP.srv.capsKnown then return true end      -- aelteres Modul: der Server entscheidet
+   return (math.floor(BP.srv.caps / CAP_TELEPORT) % 2) == 1
+end
+
+-- Ein einziger Beobachter fuer beide Fristen (Antwort auf den Teleport, Antwort auf
+-- den Handschlag). Frueher entstand je Aufruf ein neuer Rahmen, und Rahmen werden
+-- in WoW nie freigegeben.
+local replyWatchFrom = nil
+local watchFrame = CreateFrame("Frame", "BotpadWatch")
+watchFrame:SetScript("OnUpdate", function()
+   local now = GetTime()
+
+   if replyWatchFrom then
+      if lastReply > replyWatchFrom then
+         replyWatchFrom = nil
+      elseif (now - replyWatchFrom) >= 5 then
+         replyWatchFrom = nil
+         BP.Warn("Keine Antwort vom Server auf den Teleport. Ist mod-autotravel aktiv?")
+      end
+   end
+
+   if pendingTp and (now - pendingTp.at) >= HELLO_TIMEOUT then
+      pendingTp = nil
+      BP.srv.state = "UNKNOWN"          -- naechster Versuch fragt erneut
+      BP.Warn("Keine Antwort von mod-autotravel. Der Teleportbefehl wurde NICHT gesendet. " ..
+              "Ist das Modul auf dem Server aktiv?")
+   end
+end)
+
+local function SendTeleport(args)
+   if not TeleportAllowed() then
+      BP.Warn("Der Teleport ist dir auf diesem Server nicht erlaubt (Stufe " ..
+              tostring(BP.srv.sec) .. "). Ein Spielleiter kann ihn mit " ..
+              "AutoTravel.TeleportSecurity freigeben.")
+      return
+   end
 
    lastReply = 0
    BP.Bot.SendCommand(".at tp " .. args)
 
-   -- Antwortet das Servermodul nicht, ist es nicht installiert.
-   local started = GetTime()
-   local w = CreateFrame("Frame")
-   w:SetScript("OnUpdate", function()
-      if lastReply > started then w:SetScript("OnUpdate", nil) return end
-      if (GetTime() - started) < 5 then return end
-      w:SetScript("OnUpdate", nil)
-      BP.Warn("Keine Antwort vom Server. Ist mod-autotravel installiert und aktiv?")
-   end)
+   -- Antwortet das Servermodul nach dem Handschlag trotzdem nicht, ist etwas faul.
+   replyWatchFrom = GetTime()
+end
+
+local function OnHello(body)
+   local ver, enabled, _, _, _, proto, sec, caps = strsplit("|", body)
+   local s = BP.srv
+   s.version   = ver or "?"
+   s.proto     = tonumber(proto) or 3
+   s.sec       = tonumber(sec) or 0
+   s.capsKnown = (caps ~= nil and caps ~= "")
+   s.caps      = tonumber(caps) or 0
+
+   if (tonumber(enabled) or 1) == 0 then
+      s.state = "DISABLED"
+      pendingTp = nil
+      BP.Warn("mod-autotravel ist auf diesem Server abgeschaltet.")
+      return
+   end
+
+   s.state = "READY"
+   if pendingTp then
+      local p = pendingTp
+      pendingTp = nil
+      SendTeleport(p.args)
+   end
+end
+
+-- Handschlag anstossen und den Teleport nach der Antwort ausfuehren.
+local function HelloThenTeleport(args, name)
+   pendingTp = { args = args, name = name, at = GetTime() }
+   BP.srv.state = "HELLO"
+   BP.Bot.SendCommand(".at hello")
+end
+
+local function DoTeleport()
+   local args, nameOrErr = BuildArgs()
+   if not args then BP.Warn(nameOrErr) return end
+
+   local state = BP.srv.state
+   if state == "READY" then
+      SendTeleport(args)
+   elseif state == "DISABLED" then
+      BP.Warn("mod-autotravel ist auf diesem Server abgeschaltet.")
+   elseif state == "HELLO" then
+      pendingTp = pendingTp or { args = args, name = nameOrErr, at = GetTime() }
+      pendingTp.args = args
+   else
+      HelloThenTeleport(args, nameOrErr)
+   end
 end
 
 function BP.Teleport()
@@ -121,10 +221,7 @@ StaticPopupDialogs["BOTPAD_TP"] = {
 -- ---------------------------------------------------------------------------
 
 function BP.ToggleBot()
-   -- Beim Ausschalten zuerst die Strategien zuruecksetzen, danach umschalten.
-   if BP.Bot.running == true and BP.GetBool("ResetOnStop") then
-      BP.Bot.ResetStrategies()
-   end
+   -- Die Strategien beim Ausschalten zuruecksetzen erledigt Bot.Toggle().
    BP.Bot.Toggle()
 end
 
@@ -138,12 +235,20 @@ chat:RegisterEvent("CHAT_MSG_WHISPER")
 chat:RegisterEvent("ADDON_LOADED")
 chat:RegisterEvent("PLAYER_LOGIN")
 
-chat:SetScript("OnEvent", function(self, event, arg1)
+chat:SetScript("OnEvent", function(self, event, arg1, arg2)
    if event == "ADDON_LOADED" then
-      if arg1 == "Botpad" then
+      -- Der Name ist der Ordnername; die Anleitung nennt "BotPad", die TOC-Datei
+      -- heisst "Botpad". Ein Vergleich mit genau einer Schreibweise liesse die
+      -- Voreinstellungen und die Umstellung je nach Ordnername aus.
+      if type(arg1) == "string" and string.lower(arg1) == "botpad" then
          BotpadDB = BotpadDB or {}
          for k, v in pairs(DEFAULTS) do
             if BotpadDB[k] == nil then BotpadDB[k] = v end
+         end
+         -- Der frueher mitgelieferte Standardbefehl war ein unbekannter Befehl.
+         -- Hat der Spieler ihn nie angefasst, auf den richtigen umstellen.
+         if BotpadDB.SelfCommand == ".playerbot bot self" then
+            BotpadDB.SelfCommand = DEFAULTS.SelfCommand
          end
       end
       return
@@ -155,16 +260,30 @@ chat:SetScript("OnEvent", function(self, event, arg1)
       if not BP.Carb.IsAvailable() then
          BP.Warn("Carbonite nicht gefunden - der Teleport braucht es als Zielquelle.")
       end
+      -- Zwei Addons, die beide den Selbstmodus konfigurieren, wuerden dem Bot
+      -- bei jedem Einschalten zwei verschiedene Strategiesaetze schicken.
+      if IsAddOnLoaded and IsAddOnLoaded("AutoTravel") then
+         BP.Bot.disabled = true
+         BP.Warn("AutoTravel ist ebenfalls geladen und steuert den Playerbot. Botpad setzt " ..
+                 "deshalb keine Strategien; Teleport und Umschalter bleiben nutzbar.")
+      end
       return
    end
 
    if type(arg1) ~= "string" then return end
 
+   -- Fluesternachrichten zaehlen nur vom eigenen Charakter. Jeder andere Spieler
+   -- koennte sonst "SelfBot is now active." fluestern und den Zustand im Addon
+   -- verfaelschen (oder eine [AT]-Zeile vortaeuschen).
+   if event == "CHAT_MSG_WHISPER" and arg2 ~= UnitName("player") then return end
+
    -- Antworten des Servermoduls
    if string.sub(arg1, 1, 4) == "[AT]" then
       lastReply = GetTime()
       local kind = string.sub(arg1, 5, 5)
-      if kind == "M" then BP.Print(string.sub(arg1, 7)) end
+      local body = string.sub(arg1, 7)
+      if kind == "M" then BP.Print(body)
+      elseif kind == "H" then OnHello(body) end
       return
    end
 
@@ -247,6 +366,15 @@ SlashCmdList["BOTPAD"] = function(input)
       BP.Set("Debug", BP.GetBool("Debug") and 0 or 1)
       BP.Print("Debug " .. (BP.GetBool("Debug") and "AN" or "AUS"))
 
+   elseif cmd == "info" then
+      local s = BP.srv
+      BP.Print("Botpad " .. BP.VERSION)
+      BP.Print("Servermodul: " .. s.state ..
+               (s.state == "READY" and (" (Version " .. s.version .. ", Stufe " .. s.sec ..
+                                        ", Teleport " .. (TeleportAllowed() and "erlaubt" or "nicht erlaubt") .. ")") or ""))
+      BP.Print("Selbstmodus: " .. BP.Bot.StatusText() .. "  |  Befehl: " .. tostring(BP.Get("SelfCommand")))
+      BP.Print("Carbonite: " .. (BP.Carb.IsAvailable() and "gefunden" or "nicht gefunden"))
+
    else
       BP.Print("Befehle:")
       local l = {
@@ -257,6 +385,7 @@ SlashCmdList["BOTPAD"] = function(input)
          "/bp befehl <text>  Umschaltbefehl anpassen",
          "/bp karte <id>     Karten-ID erzwingen (0 = automatisch)",
          "/bp nachfrage      Sicherheitsabfrage vor Teleport",
+         "/bp info           Version, Verbindung, Berechtigung",
          "/bp debug          gesendete Befehle anzeigen",
       }
       for _, x in ipairs(l) do DEFAULT_CHAT_FRAME:AddMessage("   " .. x) end

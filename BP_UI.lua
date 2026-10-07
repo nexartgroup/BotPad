@@ -64,6 +64,14 @@ end
 -- Panel
 -- ---------------------------------------------------------------------------
 
+-- Text des Auswahlfeldes direkt setzen: UIDropDownMenu_SetSelectedValue
+-- beschriftet das Feld nur, solange die Liste offen ist.
+function UI.SetModeText()
+   if not dropdown then return end
+   local fs = _G[dropdown:GetName() .. "Text"]
+   if fs then fs:SetText(BP.Bot.Current().name) end
+end
+
 local function BuildPanel()
    if panel then return end
 
@@ -122,15 +130,16 @@ local function BuildPanel()
    f.lState = st
 
    -- Modusauswahl
-   local dropdown = CreateFrame("Frame", "BotpadModeDropDown", f, "UIDropDownMenuTemplate")
+   -- Kein 'local': die Variable gehoert der Datei (oben deklariert). Ein lokales
+   -- 'dropdown' verdeckte sie, UI.Update() sah nie einen Wert und das Auswahlfeld
+   -- zeigte nach /bp modus weiter den alten Modus.
+   dropdown = CreateFrame("Frame", "BotpadModeDropDown", f, "UIDropDownMenuTemplate")
    dropdown:SetPoint("TOPLEFT", 54, -28)
    dropdown:SetWidth(30)
 
-   -- In 3.3.5a lautet die Reihenfolge (frame, width). Aeltere Fassungen
-   -- erwarten (width, frame) -- deshalb abgesichert.
-   if not pcall(UIDropDownMenu_SetWidth, dropdown, 80) then
-      pcall(UIDropDownMenu_SetWidth, 80, dropdown)
-   end
+   -- In 3.3.5a lautet die Signatur UIDropDownMenu_SetWidth(frame, width, padding)
+   -- (Blizzards UIDropDownMenu.lua, Tag 3.3.5).
+   pcall(UIDropDownMenu_SetWidth, dropdown, 80)
 
    UIDropDownMenu_Initialize(dropdown, function()
       for _, m in ipairs(BP.Bot.Modes) do
@@ -145,7 +154,7 @@ local function BuildPanel()
          UIDropDownMenu_AddButton(info)
       end
    end)
-   UIDropDownMenu_SetSelectedValue(dropdown, BP.Get("Mode"))
+   UI.SetModeText()
 
    -- Aktionen
    local bot = Button(f, 80, 24, "", function() BP.ToggleBot() end)
@@ -276,10 +285,9 @@ function UI.Update()
    panel.lState:SetText("Bot " .. BP.Bot.StatusText())
    panel.bot.label:SetText(on and "BOT AUS" or "BOT EIN")
 
-   if dropdown then
-      UIDropDownMenu_SetSelectedValue(dropdown, BP.Get("Mode"))
-      if UIDropDownMenu_SetText then
-         pcall(UIDropDownMenu_SetText, dropdown, BP.Bot.Current().name)
-      end
-   end
+   -- Kein UIDropDownMenu_SetSelectedValue hier: es beruehrt die Knoepfe der
+   -- gemeinsamen Liste DropDownList1 und koennte ein anderes, gerade offenes Menue
+   -- umhaken. Der Haken in der Liste kommt beim Oeffnen aus der Initialisierung
+   -- (info.checked), der angezeigte Text direkt aus SetModeText().
+   if dropdown then UI.SetModeText() end
 end

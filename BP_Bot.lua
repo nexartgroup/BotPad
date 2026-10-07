@@ -21,20 +21,24 @@ B.Modes = {
     {
       key  = "buffbot",
       name = "BuffBot",
-      desc = "Kein Sammeln, kein Looten ausser Quest und Beruf.",
+      desc = "Kein Sammeln, kein Looten.",
       nc   = "+bdps,+chat,-default,-dps assist,-duel,+emote,-follow,-food,-gather,-loot,-mount,+nc,+pet,-pvp,-quest,+heal,+cure",
       co   = "-aoe,+avoid aoe,+bdps,+bm,+cast time,+cc,+chat,-default,+dps assist,+duel,+formation,+potions,+racials,+healer dps,+cure",
-      ll   = "-all,+quest,+skill,-gray",
-      ss   = "self" 
+      -- "ll" kennt nur all/*, gray/g und disenchant; jeder andere Wert wird zu
+      -- "normal" (LootStrategyValue::instance in mod-playerbots). Das Looten
+      -- schraenken hier die nc-Strategien -loot und -gather ein.
+      ll   = "normal"
    },
    {
       key  = "minimal",
       name = "Minimal",
-      desc = "Kein Sammeln, kein Looten ausser Quest und Beruf.",
+      desc = "Kein Sammeln, kein Looten.",
       nc   = "+bdps,-chat,+default,+dps assist,-duel,-emote,+follow,+food,-gather,-loot,+mount,+nc,+pet,+pvp,+quest,+heal,+cure",
       co   = "+aoe,+avoid aoe,+bdps,+bm,+cast time,+cc,+chat,+default,+dps assist,+duel,+formation,+potions,+racials,+healer dps,+cure",
-      ll   = "-all,+quest,+skill,-gray",
-      ss   = "self" 
+      -- "ll" kennt nur all/*, gray/g und disenchant; jeder andere Wert wird zu
+      -- "normal" (LootStrategyValue::instance in mod-playerbots). Das Looten
+      -- schraenken hier die nc-Strategien -loot und -gather ein.
+      ll   = "normal"
    },
    {
       key  = "normal",
@@ -42,8 +46,7 @@ B.Modes = {
       desc = "Voller Funktionsumfang, normales Looten.",
       nc   = "+bdps,+chat,+default,+dps assist,+duel,+emote,+follow,+food,+gather,+loot,+mount,+nc,+pet,+pvp,+quest,+heal,+cure",
       co   = "+aoe,+avoid aoe,+bdps,+bm,+cast time,+cc,+chat,+default,+dps assist,+duel,+formation,+potions,+racials,+healer dps",
-      ll   = "normal",
-      ss   = "self" 
+      ll   = "normal"
    },
    {
       key  = "grind",
@@ -51,8 +54,7 @@ B.Modes = {
       desc = "Wie Normal, sucht zusaetzlich selbst Ziele.",
       nc   = "+bdps,+chat,+default,+dps assist,+duel,+emote,+follow,+food,+gather,+loot,+mount,+nc,+pet,+pvp,+quest,+grind,+cure",
       co   = "+aoe,+avoid aoe,+bdps,+bm,+cast time,+cc,+chat,+default,+dps assist,+duel,+formation,+potions,+racials,+healer dps,+cure,+heal",
-      ll   = "normal",
-      ss   = "self" 
+      ll   = "normal"
    },
    {
       key  = "grind_loot",
@@ -60,8 +62,7 @@ B.Modes = {
       desc = "Wie Normal, sucht zusaetzlich selbst Ziele.",
       nc   = "+bdps,+chat,+default,+dps assist,+duel,+emote,+follow,+food,+gather,+loot,+mount,+nc,+pet,+pvp,+quest,+grind,+cure",
       co   = "+aoe,+avoid aoe,+bdps,+bm,+cast time,+cc,+chat,+default,+dps assist,+duel,+formation,+potions,+racials,+healer dps,+cure,+heal",
-      ll   = "all",
-      ss   = "self" 
+      ll   = "all"
    },
 }
 
@@ -94,26 +95,38 @@ pump:SetScript("OnUpdate", function()
    if (now - lastSent) < GAP then return end
    local item = table.remove(queue, 1)
    lastSent = now
-   item()
+   item.fn()
 end)
 
--- Serverbefehl (".playerbot ..."). Wird serverseitig abgefangen und nie an
--- andere Spieler weitergegeben, der Kanal ist dafuer bedeutungslos.
+-- Serverbefehl (".playerbots ..."). Wird serverseitig abgefangen und nie an
+-- andere Spieler weitergegeben, SOFERN der Befehl dort existiert. Ein unbekannter
+-- Punktbefehl bringt einem normalen Spieler "Es gibt keinen solchen Befehl" --
+-- und nur bei AllowPlayerCommands = 0 (nicht Standard) behandelt AzerothCore ihn
+-- als gewoehnlichen Text (ChatHandler::_ParseCommands), den der Charakter dann in
+-- /sagen riefe.
 function B.SendCommand(cmd)
-   table.insert(queue, function()
+   table.insert(queue, { tag = "cmd", fn = function()
       SendChatMessage(cmd, "SAY")
       BP.Debug("-> " .. cmd)
-   end)
+   end })
 end
 
 -- Botbefehl per Fluestern an den eigenen Charakter
 function B.Whisper(text)
    if not text or text == "" then return end
    recent[text] = GetTime()
-   table.insert(queue, function()
+   table.insert(queue, { tag = "bot", fn = function()
       SendChatMessage(text, "WHISPER", nil, UnitName("player"))
       BP.Debug("-> [an dich] " .. text)
-   end)
+   end })
+end
+
+-- Wartende Fluesterbefehle verwerfen (z. B. wenn der Server den Selbstmodus
+-- verweigert und die Strategiebefehle dahinter sinnlos sind).
+function B.DropWhispers()
+   for i = #queue, 1, -1 do
+      if queue[i].tag == "bot" then table.remove(queue, i) end
+   end
 end
 
 function B.IsOwnCommand(msg)
@@ -130,9 +143,27 @@ end
 -- Hand geschaltet wurde.
 
 B.running = nil           -- nil = unbekannt, true/false = bestaetigt
+B.disabled = false        -- true: ein anderes Addon (AutoTravel) steuert den Bot
 
-local ON_PATTERNS  = { "enable player botai", "playerbot ai enabled" }
-local OFF_PATTERNS = { "disable player botai", "playerbot ai disabled" }
+local watchUntil = 0      -- Frist fuer die Bestaetigung; VOR den Funktionen, die sie lesen
+
+-- Die Meldungen von mod-playerbots haben sich geaendert. Heute (PlayerbotMgr.cpp,
+-- Befehl "self"):
+--     "SelfBot is now active."                       eingeschaltet
+--     "SelfBot is now deactivated."                  ausgeschaltet
+--     "SelfBot is disabled server-wide."             AiPlayerbot.SelfBotLevel = 0
+--     "SelfBot is restricted for this account."      SelfBotLevel = 1, kein Spielleiter
+-- Aeltere Staende meldeten "Enable/Disable player botAI". Beide Fassungen werden
+-- erkannt.
+local ON_PATTERNS     = { "selfbot is now active", "enable player botai", "playerbot ai enabled" }
+local OFF_PATTERNS    = { "selfbot is now deactivated", "disable player botai", "playerbot ai disabled" }
+local REFUSE_PATTERNS = { "selfbot is disabled server-wide", "selfbot is restricted for this account",
+                          "playerbot system is currently disabled",   -- AiPlayerbot.Enabled = 0
+                          "you cannot control bots yet" }             -- noch kein Bot-Verwalter
+
+local watchWant = nil     -- gewuenschter Zustand der letzten Umschaltung
+local watchRetried = false
+local SendToggle          -- unten definiert
 
 local function MatchAny(low, list)
    for _, p in ipairs(list) do
@@ -141,18 +172,54 @@ local function MatchAny(low, list)
    return false
 end
 
+-- ".playerbots bot self" ist ein Umschalter. Ist der Zustand unbekannt (nach
+-- /reload, oder der Server hat den Selbstmodus beim Anmelden selbst eingeschaltet),
+-- kehrt ein Klick ihn um. Kommt innerhalb der Wartezeit die Bestaetigung des
+-- GEGENTEILS, wird einmal erneut umgeschaltet. Rueckgabe: true, wenn umgeschaltet
+-- wird (dann ist die Strategieanwendung fuer diese Bestaetigung hinfaellig).
+local function Reconcile()
+   if watchUntil == 0 or watchWant == nil then return false end
+   if B.running == watchWant then watchUntil = 0 return false end
+   if watchRetried then
+      watchUntil = 0
+      BP.Warn("Der Selbstmodus liess sich nicht in den gewuenschten Zustand bringen. " ..
+              "Er ist " .. (B.running and "an" or "aus") .. ".")
+      return false
+   end
+   watchRetried = true
+   B.DropWhispers()
+   SendToggle(watchWant, true)
+   return true
+end
+
 function B.OnSystemMessage(msg)
    if type(msg) ~= "string" then return false end
    local low = string.lower(msg)
 
+   if MatchAny(low, REFUSE_PATTERNS) then
+      -- Keine Fehlbedienung: der Server verweigert den Selbstmodus. Die
+      -- Strategiebefehle dahinter waeren sinnlos, die Fristueberwachung soll
+      -- nicht zusaetzlich meckern.
+      B.running = false
+      watchUntil = 0
+      B.DropWhispers()
+      BP.Warn("Der Server verweigert den Selbstmodus: " .. msg ..
+              " (AiPlayerbot.SelfBotLevel in der Serverkonfiguration)")
+      if BP.UI then BP.UI.Update() end
+      return true
+   end
+
    if MatchAny(low, ON_PATTERNS) then
       B.running = true
-      B.ApplyMode(true)          -- Strategien passend zum Modus setzen
+      if not Reconcile() and not B.disabled then
+         B.ApplyMode(true)       -- Strategien passend zum Modus setzen
+      end
       if BP.UI then BP.UI.Update() end
       return true
    end
    if MatchAny(low, OFF_PATTERNS) then
       B.running = false
+      Reconcile()
       if BP.UI then BP.UI.Update() end
       return true
    end
@@ -170,7 +237,6 @@ end
 -- ---------------------------------------------------------------------------
 
 local watchdog = CreateFrame("Frame")
-local watchUntil = 0
 
 watchdog:SetScript("OnUpdate", function()
    if watchUntil == 0 then return end
@@ -184,11 +250,26 @@ watchdog:SetScript("OnUpdate", function()
 end)
 
 -- Der Befehl ist ein Umschalter: derselbe Aufruf schaltet ein und aus.
-function B.Toggle()
-   if B.running then B.ResetStrategies() end
-   B.SendCommand(BP.Get("SelfCommand") or ".playerbot bot self")
-   if B.running then B.ResetStrategies() end
+--
+-- Beim Ausschalten werden die Strategien VOR dem Umschalter zurueckgesetzt. Die
+-- Fassung davor tat es zusaetzlich danach (und noch einmal in BP.ToggleBot):
+-- ohne KI antwortet niemand auf die Fluesterbefehle, und aus einem Klick wurden
+-- zehn gedrosselte Nachrichten.
+function SendToggle(want, isRetry)
+   B.SendCommand(BP.Get("SelfCommand") or ".playerbots bot self")
+   if not isRetry then watchRetried = false end
+   watchWant = want
    watchUntil = GetTime() + 6
+end
+
+function B.Toggle()
+   -- Gewuenscht ist das Gegenteil des bekannten Zustands; bei unbekanntem Zustand
+   -- zeigt der Knopf "BOT EIN", gewuenscht ist also "an".
+   local want = (B.running ~= true)
+   if not want and BP.GetBool("ResetOnStop") then
+      B.ResetStrategies()
+   end
+   SendToggle(want, false)
 end
 
 -- ---------------------------------------------------------------------------
@@ -196,12 +277,12 @@ end
 -- ---------------------------------------------------------------------------
 
 function B.ApplyMode(silent)
+   if B.disabled then return end
    local m = B.Current()
    B.ResetStrategies()
    B.Whisper("nc " .. m.nc)
    B.Whisper("co " .. m.co)
    B.Whisper("ll " .. m.ll)
-   B.Whisper("ss " .. m.ss)
    if not silent then
       BP.Print("Modus: |cffffffff" .. m.name .. "|r - " .. m.desc)
    end
