@@ -2,7 +2,7 @@
 ## Title: Botpad
 ## Notes: Minimales Bedienfeld fuer den Playerbot-Selbstmodus und Teleport zum Carbonite-Ziel.
 ## Author: -
-## Version: 1.0
+## Version: 1.1
 ## SavedVariablesPerCharacter: BotpadDB
 ## OptionalDeps: Carbonite
 ## X-Requires-Server-Module: mod-autotravel
