@@ -43,6 +43,7 @@ The addon targets the **3.3.5a client (Interface 30300)** and stores its setting
 
   * `/botpad`
   * `/bp`
+  * `/bp info` — version, module connection, teleport permission, self-mode state
 
 * 🔇 **Chat filtering**
 
@@ -112,11 +113,18 @@ Running the command without arguments toggles the BotPad window.
 
 BotPad sends the configured self-mode command to the server and waits for the server's response to determine whether Playerbot is enabled or disabled.
 
-The default command is:
+The command is a **toggle**: the same call switches self-mode on and off. The
+default is:
 
 ```text
-.playerbot bot self
+.playerbots bot self
 ```
+
+`playerbots` is the plural name mod-playerbots registers; AzerothCore only
+matches the full command name, so the older spelling `.playerbot` is simply an
+unknown command (for a normal player the server answers "There is no such command").
+Older BotPad versions shipped that spelling as the default — if you never changed
+it, it is replaced automatically on load.
 
 If your server uses a different command, it can be changed with:
 
@@ -124,11 +132,13 @@ If your server uses a different command, it can be changed with:
 /bp befehl <command>
 ```
 
-For example:
-
-```text
-/bp befehl .playerbots bot self
-```
+BotPad reads the server's answer instead of guessing the state. Both current
+(`SelfBot is now active.` / `SelfBot is now deactivated.`) and older
+(`Enable player botAI` / `Disable player botAI`) texts are recognised. The server
+may also **refuse** self-mode (`SelfBot is disabled server-wide.` /
+`SelfBot is restricted for this account.`): `AiPlayerbot.SelfBotLevel` defaults to
+`1`, which means game masters only. BotPad then tells you why and discards the
+strategy commands it had queued.
 
 ### Select a bot mode
 
@@ -148,7 +158,13 @@ Select one:
 
 The addon also contains `buffbot` and `grind_loot` presets.
 
-When a mode is active, BotPad configures the Playerbot `nc`, `co`, `ll`, and `ss` strategies for that preset. 
+When a mode is active, BotPad configures the Playerbot `nc`, `co` and `ll` strategies for that preset.
+
+Note that `ll` (loot strategy) only knows `all`, `gray` and `disenchant`; mod-playerbots
+treats every other value as `normal`. What limits looting in *BuffBot* and *Minimal* is
+therefore the `nc` strategies `-loot` and `-gather`, not `ll`. (Earlier versions also
+sent `ss self`, which is the *skip spells* command and only added a spell called
+"self" to that list; it is gone.)
 
 ### Teleport to the Carbonite target
 
@@ -163,6 +179,18 @@ or:
 ```
 
 BotPad reads the final destination from Carbonite, converts its coordinates to normalized zone coordinates, resolves the corresponding WoW map ID, and sends the resulting teleport request to `mod-autotravel`. 
+
+**The server decides who may teleport.** By default `.at tp` needs game-master
+rights (`AutoTravel.TeleportSecurity = 2`). BotPad asks the module first and
+refuses to send the command if it is not allowed for your account, saying why.
+
+**Handshake first.** BotPad sends `.at hello` the first time you teleport and
+sends `.at tp` only after the module has answered. Without the module AzerothCore
+answers every `.at ...` command with "There is no such command", and on servers
+with `AllowPlayerCommands = 0` (not the default) it treats an unknown dot-command as
+ordinary chat, so the coordinates would be said in /say. The handshake also tells
+BotPad what your account may do. If the module does not answer, nothing is sent and
+you get a warning; the next attempt asks again.
 
 By default, BotPad asks for confirmation before teleporting.
 
@@ -205,7 +233,7 @@ Default settings include:
 | Setting        |               Default | Description                        |
 | -------------- | --------------------: | ---------------------------------- |
 | `Mode`         |              `normal` | Active Playerbot mode              |
-| `SelfCommand`  | `.playerbot bot self` | Command used to toggle self-mode   |
+| `SelfCommand`  | `.playerbots bot self` | Command used to toggle self-mode  |
 | `HideCommands` |                   `1` | Hide BotPad command echoes         |
 | `ResetOnStop`  |                   `1` | Reset bot strategies when stopping |
 | `ConfirmTp`    |                   `1` | Ask before teleporting             |
@@ -273,11 +301,23 @@ Set a destination in Carbonite before using:
 /bp tp
 ```
 
-### "Keine Antwort vom Server."
+### "Keine Antwort von mod-autotravel. Der Teleportbefehl wurde NICHT gesendet"
 
 Make sure **mod-autotravel** is installed and enabled on the server.
 
-BotPad waits for an `[AT]` response after sending the teleport request. If no response arrives within the expected period, it warns that the server module may be missing or inactive. 
+BotPad asks the module (`.at hello`) before the first teleport and waits five seconds for the answer. Without one it does not send the teleport command and warns instead.
+
+### "Der Teleport ist dir auf diesem Server nicht erlaubt"
+
+The module only allows `.at tp` from the account level set in `AutoTravel.TeleportSecurity` (default: game master). A game master or administrator can lower it.
+
+### "Der Server verweigert den Selbstmodus"
+
+The Playerbot self-mode is restricted by the server (`AiPlayerbot.SelfBotLevel`; `0` = off, `1` = game masters only, default). Ask your server administrator.
+
+### "AutoTravel ist ebenfalls geladen"
+
+Use either BotPad or AutoTravel for the Playerbot, not both: each would send the bot its own strategy set every time self-mode switches on. When BotPad finds AutoTravel it stops sending strategies; teleport and the toggle keep working.
 
 ### Playerbot toggle does not work
 
@@ -290,7 +330,7 @@ Check the command configured for self-mode:
 The default is:
 
 ```text
-.playerbot bot self
+.playerbots bot self
 ```
 
 If your server uses a different Playerbot command syntax, configure it accordingly.
@@ -309,11 +349,27 @@ BotPad is currently targeted specifically at:
 WoW Client:       3.3.5a
 Interface:        30300
 Playerbot:        mod-playerbots
-Teleport:         mod-autotravel
+Teleport:         mod-autotravel (protocol 3 or newer)
 Optional addon:   Carbonite
 ```
 
 The addon uses the WoW 3.3.5a UI API and is not intended for modern WoW clients without modification. 
+
+## Testing without the game
+
+```bash
+tests/check.sh
+```
+
+Needs `lua5.1` (the version WoW 3.3.5a uses) and, optionally, `luacheck`. It runs
+`luacheck` (finds names that do not exist, such as a call to a function declared
+further down the file), a syntax check, and `tests/run.lua`, which loads the addon
+into a mock of the WoW API (`tests/mock_wow.lua`) and checks the handshake before
+teleport, the recognition of Playerbot messages, the toggle sequence, the mode
+dropdown and the AutoTravel conflict handling.
+
+This does **not** check how anything looks, or that the real client API behaves
+like the mock. It does not replace testing in the game.
 
 ## License
 
