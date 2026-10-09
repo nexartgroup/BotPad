@@ -294,11 +294,13 @@ function B.SetMode(key)
    BP.Print("Modus: |cffffffff" .. m.name .. "|r - " .. m.desc)
    if B.running then B.ApplyMode(true) end
    if BP.UI then BP.UI.Update() end
+   if BP.Options then BP.Options.Refresh() end
 end
 
 -- Beim Ausschalten die Strategien zuruecksetzen, damit der Charakter nicht
 -- mit halb gesetzten Botstrategien zurueckbleibt.
 function B.ResetStrategies()
+   if B.disabled then return end      -- AutoTravel steuert die Strategien
    B.Whisper("ll normal")
    B.Whisper("nc !")
    B.Whisper("co !")

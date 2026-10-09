@@ -39,6 +39,12 @@ The addon targets the **3.3.5a client (Interface 30300)** and stores its setting
   * Mode selector and controls for the main BotPad functions.
   * Uses WoW's built-in UI assets; no additional graphics are required. 
 
+* 🔧 **Settings page**
+
+  * **Interface → AddOns → Botpad** (or `/bp optionen`, the `..` button in the panel header, Shift+click on the minimap button).
+  * Check boxes for the panel, the minimap button, resetting strategies on stop, hiding the command echoes, the teleport confirmation and debug output; buttons for the mode; fields for the toggle command and a forced map ID; a button that resets everything.
+  * Shows the server-module connection, the self-mode state and whether Carbonite was found.
+
 * 💬 **Slash commands**
 
   * `/botpad`
@@ -104,6 +110,14 @@ or:
 ```
 
 Running the command without arguments toggles the BotPad window.
+
+### Open the settings
+
+```text
+/bp optionen
+```
+
+The page lives under **Interface → AddOns → Botpad**. Everything on it can also be set with a slash command; both ways change the same saved variables. `/bp standard` resets all settings to their defaults (the window position, the minimap button position and whether the panel is shown stay as they are).
 
 ### Toggle Playerbot self-mode
 
@@ -238,10 +252,13 @@ Default settings include:
 | `ResetOnStop`  |                   `1` | Reset bot strategies when stopping |
 | `ConfirmTp`    |                   `1` | Ask before teleporting             |
 | `MinimapAngle` |                 `210` | Minimap position setting           |
+| `MinimapButton` |                  `1` | Show the minimap button            |
 | `Shown`        |                   `1` | Whether the panel is visible       |
 | `Debug`        |                   `0` | Enable debug messages              |
 
-The panel position is also saved when the window is moved. 
+The panel position is also saved when the window is moved. `ForcedMapId` (see `/bp karte`) is only present while a map ID is forced.
+
+The toggle command (`SelfCommand`, `/bp befehl <text>`) is sent as a chat message, so it must start with a dot (`.playerbots bot self`). Without the dot the character would say it out loud; BotPad refuses such input.
 
 ## How teleporting works
 
@@ -280,6 +297,7 @@ BotPad/
 ├── BP_Carbonite.lua    # Carbonite destination integration
 ├── BP_MapIds.lua       # Zone → WoW map ID resolution
 ├── BP_UI.lua            # In-game control panel
+├── BP_Options.lua      # Settings page (Interface → AddOns → Botpad)
 └── LICENSE             # GPL-3.0
 ```
 
@@ -317,7 +335,9 @@ The Playerbot self-mode is restricted by the server (`AiPlayerbot.SelfBotLevel`;
 
 ### "AutoTravel ist ebenfalls geladen"
 
-Use either BotPad or AutoTravel for the Playerbot, not both: each would send the bot its own strategy set every time self-mode switches on. When BotPad finds AutoTravel it stops sending strategies; teleport and the toggle keep working.
+Use either BotPad or AutoTravel for the Playerbot, not both: each would send the bot its own strategy set every time self-mode switches on. When BotPad finds AutoTravel it stops sending strategies (mode, reset on stop); teleport and the toggle keep working.
+
+In that case BotPad also leaves the server module's text messages and protocol lines to AutoTravel: it neither prints the messages a second time nor hides the lines (AutoTravel's own "hide protocol lines" setting decides). The settings page shows a notice and greys out the mode buttons and "reset strategies on stop".
 
 ### Playerbot toggle does not work
 
@@ -340,6 +360,13 @@ You can also enable debugging:
 ```text
 /bp debug
 ```
+
+## Changes in 1.2
+
+* **Settings page** under Interface → AddOns → Botpad (see above); new setting `MinimapButton`; `/bp optionen`, `/bp standard`.
+* **No more doubled messages.** The text messages of the server module were printed twice (the raw `[AT]M|…` line and again with the "Botpad:" prefix). BotPad now hides the raw line when it prints it itself; with AutoTravel loaded it prints nothing and filters nothing, AutoTravel does.
+* **With AutoTravel loaded** switching the bot off no longer sends `nc !` / `co !` / `ll normal` (BotPad does not manage strategies then).
+* **`/bp befehl` and the settings field refuse a command without a leading dot**, which the client would send as ordinary chat.
 
 ## Compatibility
 
@@ -366,7 +393,8 @@ Needs `lua5.1` (the version WoW 3.3.5a uses) and, optionally, `luacheck`. It run
 further down the file), a syntax check, and `tests/run.lua`, which loads the addon
 into a mock of the WoW API (`tests/mock_wow.lua`) and checks the handshake before
 teleport, the recognition of Playerbot messages, the toggle sequence, the mode
-dropdown and the AutoTravel conflict handling.
+dropdown, the settings page (check boxes, mode buttons, input fields, reset,
+opening) and the AutoTravel conflict handling.
 
 This does **not** check how anything looks, or that the real client API behaves
 like the mock. It does not replace testing in the game.

@@ -52,12 +52,33 @@ local function Button(parent, w, h, label, onClick)
       end
    end)
    b:SetScript("OnLeave", function()
-      b:SetBackdropColor(0.13, 0.15, 0.18, 1)
-      b:SetBackdropBorderColor(0.26, 0.29, 0.34, 1)
+      UI.RestColors(b)
       GameTooltip:Hide()
    end)
    b:SetScript("OnClick", onClick)
    return b
+end
+
+-- Fuer die Einstellungsseite (BP_Options.lua) wiederverwendbar
+UI.Button = Button
+UI.Skin = Skin
+
+-- Ruhefarben eines Knopfes; ein ausgewaehlter (z. B. der aktive Modus) behaelt seine
+-- Hervorhebung, wenn die Maus ihn verlaesst.
+function UI.RestColors(b)
+   if b.selected then
+      b:SetBackdropColor(0.16, 0.34, 0.46, 1)
+      b:SetBackdropBorderColor(COL.accent[1], COL.accent[2], COL.accent[3], 1)
+   else
+      b:SetBackdropColor(0.13, 0.15, 0.18, 1)
+      b:SetBackdropBorderColor(0.26, 0.29, 0.34, 1)
+   end
+end
+
+function UI.SetSelected(b, selected)
+   if not b then return end
+   b.selected = selected and true or false
+   UI.RestColors(b)
 end
 
 -- ---------------------------------------------------------------------------
@@ -115,8 +136,18 @@ local function BuildPanel()
    local close = Button(head, 16, 14, "|cffaaaaaax|r", function()
       BP.Set("Shown", 0)
       f:Hide()
+      if BP.Options then BP.Options.Refresh() end
    end)
    close:SetPoint("RIGHT", -4, 0)
+
+   local opt = Button(head, 16, 14, "|cffaaaaaa..|r", function()
+      if BP.Options then BP.Options.Open() end
+   end)
+   opt:SetPoint("RIGHT", close, "LEFT", -3, 0)
+   opt.tip = function()
+      GameTooltip:AddLine("Einstellungen")
+      GameTooltip:AddLine("Interface -> AddOns -> Botpad", 0.7, 0.7, 0.7)
+   end
 
    -- Zustandszeile
    local dot = f:CreateTexture(nil, "OVERLAY")
@@ -216,7 +247,10 @@ local function BuildMinimap()
    b:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
    b:SetScript("OnClick", function(self, button)
-      if button == "RightButton" then UI.Toggle() else BP.ToggleBot() end
+      if IsShiftKeyDown and IsShiftKeyDown() then
+         if BP.Options then BP.Options.Open() end
+      elseif button == "RightButton" then UI.Toggle()
+      else BP.ToggleBot() end
    end)
 
    b:SetScript("OnEnter", function()
@@ -228,6 +262,7 @@ local function BuildMinimap()
       GameTooltip:AddLine(" ")
       GameTooltip:AddLine("Linksklick: Bot an/aus", 0.33, 0.82, 0.48)
       GameTooltip:AddLine("Rechtsklick: Fenster zeigen", 0.35, 0.69, 0.91)
+      GameTooltip:AddLine("Umschalt+Klick: Einstellungen", 0.35, 0.69, 0.91)
       GameTooltip:AddLine("Ziehen: Knopf verschieben", 0.6, 0.6, 0.6)
       GameTooltip:Show()
    end)
@@ -254,17 +289,23 @@ end
 function UI.Build()
    BuildPanel()
    BuildMinimap()
+   UI.Refresh()
    UI.Update()
 end
 
 function UI.Refresh()
-   if not panel then return end
-   if BP.GetBool("Shown") then panel:Show() else panel:Hide() end
+   if panel then
+      if BP.GetBool("Shown") then panel:Show() else panel:Hide() end
+   end
+   if mini then
+      if BP.GetBool("MinimapButton") then mini:Show() else mini:Hide() end
+   end
 end
 
 function UI.Toggle()
    BP.Set("Shown", BP.GetBool("Shown") and 0 or 1)
    UI.Refresh()
+   if BP.Options then BP.Options.Refresh() end
 end
 
 function UI.Update()

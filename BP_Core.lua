@@ -16,7 +16,7 @@
 Botpad = Botpad or {}
 local BP = Botpad
 
-BP.VERSION = "1.1"
+BP.VERSION = "1.2"
 local PREFIX = "|cff5ab0e8Botpad|r: "
 
 local DEFAULTS = {
@@ -30,9 +30,15 @@ local DEFAULTS = {
    ResetOnStop  = 1,
    ConfirmTp    = 1,
    MinimapAngle = 210,
+   MinimapButton = 1,
    Shown        = 1,
    Debug        = 0,
 }
+BP.DEFAULTS = DEFAULTS
+
+-- Ein anderes Addon (AutoTravel) steuert den Bot und zeigt die Meldungen des
+-- Servermoduls selbst; wird beim Anmelden festgestellt.
+BP.autoTravel = false
 
 function BP.Get(k)
    BotpadDB = BotpadDB or {}
@@ -42,6 +48,24 @@ function BP.Get(k)
 end
 function BP.Set(k, v) BotpadDB = BotpadDB or {} BotpadDB[k] = v end
 function BP.GetBool(k) local v = BP.Get(k) return v == 1 or v == true end
+
+-- Alle Einstellungen auf die Voreinstellung. Die Fensterposition, der Knopfwinkel und
+-- die Sichtbarkeit des Fensters bleiben, wie sie sind: das ist keine Einstellung,
+-- die man "zuruecksetzen" will.
+local KEEP = { Point = true, MinimapAngle = true, Shown = true }
+function BP.ResetSettings()
+   BotpadDB = BotpadDB or {}
+   for k, v in pairs(DEFAULTS) do
+      if not KEEP[k] then BotpadDB[k] = v end
+   end
+   BotpadDB.ForcedMapId = nil
+end
+
+-- Der Umschaltbefehl geht als Chatnachricht hinaus (SAY). Ohne fuehrenden Punkt wuerde
+-- der Charakter ihn laut sagen, statt dass der Server ihn als Befehl liest.
+function BP.IsServerCommand(text)
+   return type(text) == "string" and string.match(text, "^%.%S") ~= nil
+end
 
 function BP.Print(m) if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. tostring(m or "")) end end
 function BP.Warn(m)  if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. "|cffff8800" .. tostring(m or "") .. "|r") end end
@@ -255,15 +279,23 @@ chat:SetScript("OnEvent", function(self, event, arg1, arg2)
    end
 
    if event == "PLAYER_LOGIN" then
+      -- Zwei Addons, die beide den Selbstmodus konfigurieren, wuerden dem Bot
+      -- bei jedem Einschalten zwei verschiedene Strategiesaetze schicken. Das wird
+      -- VOR dem Bau von Fenster und Einstellungsseite festgestellt: beide richten
+      -- sich danach.
+      local both = IsAddOnLoaded and IsAddOnLoaded("AutoTravel")
+      if both then
+         BP.Bot.disabled = true
+         BP.autoTravel = true
+      end
+
       if BP.UI then BP.UI.Build() end
+      if BP.Options then BP.Options.Init() end
       BP.Print("v" .. BP.VERSION .. " geladen. /botpad fuer Hilfe.")
       if not BP.Carb.IsAvailable() then
          BP.Warn("Carbonite nicht gefunden - der Teleport braucht es als Zielquelle.")
       end
-      -- Zwei Addons, die beide den Selbstmodus konfigurieren, wuerden dem Bot
-      -- bei jedem Einschalten zwei verschiedene Strategiesaetze schicken.
-      if IsAddOnLoaded and IsAddOnLoaded("AutoTravel") then
-         BP.Bot.disabled = true
+      if both then
          BP.Warn("AutoTravel ist ebenfalls geladen und steuert den Playerbot. Botpad setzt " ..
                  "deshalb keine Strategien; Teleport und Umschalter bleiben nutzbar.")
       end
@@ -282,7 +314,10 @@ chat:SetScript("OnEvent", function(self, event, arg1, arg2)
       lastReply = GetTime()
       local kind = string.sub(arg1, 5, 5)
       local body = string.sub(arg1, 7)
-      if kind == "M" then BP.Print(body)
+      -- Die Textmeldungen zeigt AutoTravel selbst, wenn es geladen ist; sonst kaeme
+      -- jede Zeile doppelt.
+      if kind == "M" then
+         if not BP.autoTravel then BP.Print(body) end
       elseif kind == "H" then OnHello(body) end
       return
    end
@@ -296,9 +331,11 @@ local function Filter(a1, a2, a3)
    local msg
    if type(a1) == "string" then msg = a2 else msg = a3 end
    if BP.Bot.IsOwnCommand(msg) then return true end
-   -- Protokollzeilen des Servermoduls ebenfalls verbergen
-   if type(msg) == "string" and string.sub(msg, 1, 4) == "[AT]"
-      and string.sub(msg, 5, 5) ~= "M" then
+   -- Protokollzeilen des Servermoduls ebenfalls verbergen -- auch die Textmeldungen
+   -- ([AT]M): Botpad gibt sie selbst mit seinem Vorsatz aus, sonst stuenden sie
+   -- doppelt im Chat. Ist AutoTravel geladen, entscheidet dessen Einstellung
+   -- (HideProtocol), nicht diese.
+   if type(msg) == "string" and string.sub(msg, 1, 4) == "[AT]" and not BP.autoTravel then
       return true
    end
    return false
@@ -347,8 +384,14 @@ SlashCmdList["BOTPAD"] = function(input)
 
    elseif cmd == "befehl" then
       if rest ~= "" then
-         BP.Set("SelfCommand", rest)
-         BP.Print("Umschaltbefehl: " .. rest)
+         if not BP.IsServerCommand(rest) then
+            BP.Warn("Der Befehl muss mit einem Punkt beginnen (z. B. .playerbots bot self). " ..
+                    "Ohne Punkt wuerde der Charakter ihn laut sagen.")
+         else
+            BP.Set("SelfCommand", rest)
+            BP.Print("Umschaltbefehl: " .. rest)
+            if BP.Options then BP.Options.Refresh() end
+         end
       else
          BP.Print("Aktuell: " .. tostring(BP.Get("SelfCommand")))
       end
@@ -357,14 +400,26 @@ SlashCmdList["BOTPAD"] = function(input)
       local id = tonumber(rest)
       if id and id > 0 then BP.Set("ForcedMapId", id) BP.Print("Karten-ID erzwungen: " .. id)
       else BP.Set("ForcedMapId", nil) BP.Print("Karten-ID wieder automatisch.") end
+      if BP.Options then BP.Options.Refresh() end
 
    elseif cmd == "nachfrage" then
       BP.Set("ConfirmTp", BP.GetBool("ConfirmTp") and 0 or 1)
       BP.Print("Sicherheitsabfrage " .. (BP.GetBool("ConfirmTp") and "AN" or "AUS"))
+      if BP.Options then BP.Options.Refresh() end
+
+   elseif cmd == "optionen" or cmd == "options" or cmd == "einstellungen" then
+      if BP.Options then BP.Options.Open() end
+
+   elseif cmd == "standard" or cmd == "reset" then
+      BP.ResetSettings()
+      BP.Print("Einstellungen auf die Voreinstellung zurueckgesetzt.")
+      if BP.UI then BP.UI.Refresh() BP.UI.Update() end
+      if BP.Options then BP.Options.Refresh() end
 
    elseif cmd == "debug" then
       BP.Set("Debug", BP.GetBool("Debug") and 0 or 1)
       BP.Print("Debug " .. (BP.GetBool("Debug") and "AN" or "AUS"))
+      if BP.Options then BP.Options.Refresh() end
 
    elseif cmd == "info" then
       local s = BP.srv
@@ -385,6 +440,8 @@ SlashCmdList["BOTPAD"] = function(input)
          "/bp befehl <text>  Umschaltbefehl anpassen",
          "/bp karte <id>     Karten-ID erzwingen (0 = automatisch)",
          "/bp nachfrage      Sicherheitsabfrage vor Teleport",
+         "/bp optionen       Einstellungsseite (Interface -> AddOns -> Botpad)",
+         "/bp standard       Einstellungen auf die Voreinstellung",
          "/bp info           Version, Verbindung, Berechtigung",
          "/bp debug          gesendete Befehle anzeigen",
       }
