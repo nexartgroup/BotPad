@@ -344,7 +344,7 @@ The Playerbot self-mode is restricted by the server (`AiPlayerbot.SelfBotLevel`;
 
 Use either BotPad or AutoTravel for the Playerbot, not both: each would send the bot its own strategy set every time self-mode switches on. When BotPad finds AutoTravel it stops sending strategies (mode, reset on stop); teleport and the toggle keep working.
 
-In that case BotPad also leaves the server module's text messages and protocol lines to AutoTravel: it neither prints the messages a second time nor hides the lines (AutoTravel's own "hide protocol lines" setting decides). The settings page shows a notice and greys out the mode buttons and "reset strategies on stop".
+In that case BotPad also leaves the server module's text messages and protocol lines to AutoTravel: it neither prints the messages a second time nor hides the lines (AutoTravel's own "Protokollzeilen im Chat zeigen" setting decides). The settings page shows a notice and greys out the mode buttons and "reset strategies on stop".
 
 BotPad detects AutoTravel only by whether it is loaded, not by its settings. If you switched AutoTravel's own bot control off (`BotControl = 0`) BotPad still leaves the strategies alone; disable AutoTravel instead if you want BotPad to manage them.
 

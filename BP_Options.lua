@@ -170,7 +170,7 @@ local function ApplyGating()
    if O.hideBox then
       O.hideBox.gatedNote = BP.autoTravel
          and "AutoTravel ist geladen: ob die [AT]-Zeilen verborgen werden, bestimmt dessen Einstellung " ..
-             "(Protokollzeilen verbergen). Hier gilt der Haken nur fuer die Botbefehle."
+             "(Protokollzeilen im Chat zeigen). Hier gilt der Haken nur fuer die Botbefehle."
          or nil
    end
 end
