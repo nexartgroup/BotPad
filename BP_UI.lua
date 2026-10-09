@@ -111,7 +111,8 @@ local function BuildPanel()
    end)
    f:SetClampedToScreen(true)
 
-   local p = BP.Get("Point") or { "CENTER", 260, 0 }
+   -- AutoTravels Fenster liegt bei (240, 0) und ist 242 hoch: darunter anfangen
+   local p = BP.Get("Point") or { "CENTER", 260, -190 }
    f:SetPoint(p[1] or "CENTER", UIParent, p[1] or "CENTER", p[2] or 0, p[3] or 0)
 
    -- Kopfzeile
@@ -179,8 +180,10 @@ local function BuildPanel()
          info.value = m.key
          info.checked = (m.key == BP.Get("Mode"))
          info.func = function()
-            BP.Bot.SetMode(m.key)
-            UIDropDownMenu_SetSelectedValue(dropdown, m.key)
+            -- Unter AutoTravel lehnt SetMode ab: dann den Haken nicht umsetzen
+            if BP.Bot.SetMode(m.key) then
+               UIDropDownMenu_SetSelectedValue(dropdown, m.key)
+            end
          end
          UIDropDownMenu_AddButton(info)
       end
@@ -195,6 +198,10 @@ local function BuildPanel()
       GameTooltip:AddLine("Playerbot-Selbstmodus")
       GameTooltip:AddLine("Schaltet ihn ein oder aus und setzt", 0.7, 0.7, 0.7)
       GameTooltip:AddLine("beim Einschalten den gewaehlten Modus.", 0.7, 0.7, 0.7)
+      if BP.Bot.disabled then
+         GameTooltip:AddLine("AutoTravel ist geladen: es setzt die Strategien,", 0.91, 0.65, 0.29)
+         GameTooltip:AddLine("der Modus gilt hier nicht.", 0.91, 0.65, 0.29)
+      end
    end
    f.bot = bot
 
@@ -324,6 +331,7 @@ function UI.Update()
    else panel.dot:SetVertexColor(0.91, 0.77, 0.29, 1) end
 
    panel.lState:SetText("Bot " .. BP.Bot.StatusText())
+   if BP.Options then BP.Options.Refresh() end
    panel.bot.label:SetText(on and "BOT AUS" or "BOT EIN")
 
    -- Kein UIDropDownMenu_SetSelectedValue hier: es beruehrt die Knoepfe der

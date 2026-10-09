@@ -2,7 +2,8 @@
 -- ---------------------------------------------------------------------------
 -- Einstellungsseite unter Interface -> AddOns -> Botpad.
 --
--- Alles, was hier steht, laesst sich auch per Slash-Befehl setzen (/bp ...); die Seite
+-- Alles, was hier steht, laesst sich auch per Slash-Befehl setzen (/bp ...; die
+-- Zuordnung steht in der Hilfe, /bp ohne Argument ausser dem Fenster); die Seite
 -- ist nur die bequeme Variante. Beide Wege schreiben in dieselbe BotpadDB.
 --
 -- Die Seite liegt in einem ScrollFrame, damit nichts ausserhalb des sichtbaren
@@ -99,14 +100,26 @@ local function Edit(parent, label, x, y, width, load, onEnter)
    eb:SetWidth(width) eb:SetHeight(20)
    eb:SetAutoFocus(false)
 
-   eb:SetScript("OnEnterPressed", function()
-      eb:ClearFocus()
+   -- Enter speichert; wer das Feld mit der Maus verlaesst, hat ebenfalls gemeint, was
+   -- er getippt hat. Escape verwirft. 'skip' verhindert das doppelte Speichern, weil
+   -- ClearFocus selbst OnEditFocusLost ausloest.
+   local function commit()
       onEnter(BP.trim(eb:GetText()))
       eb.Load()
+   end
+   eb:SetScript("OnEnterPressed", function()
+      eb.skip = true
+      eb:ClearFocus()
+      commit()
    end)
    eb:SetScript("OnEscapePressed", function()
+      eb.skip = true
       eb:ClearFocus()
       eb.Load()
+   end)
+   eb:SetScript("OnEditFocusLost", function()
+      if eb.skip then eb.skip = false return end
+      commit()
    end)
 
    eb.Load = function() eb:SetText(load() or "") end
@@ -150,6 +163,15 @@ local function ApplyGating()
          if locked then w:Disable() else w:Enable() end
       end
       w.gatedNote = why
+   end
+
+   -- Nur ein Hinweis, kein Sperren: die Botbefehle verbirgt Botpad weiter, die
+   -- [AT]-Zeilen entscheidet dann AutoTravel.
+   if O.hideBox then
+      O.hideBox.gatedNote = BP.autoTravel
+         and "AutoTravel ist geladen: ob die [AT]-Zeilen verborgen werden, bestimmt dessen Einstellung " ..
+             "(Protokollzeilen verbergen). Hier gilt der Haken nur fuer die Botbefehle."
+         or nil
    end
 end
 
@@ -235,11 +257,7 @@ local function Build()
       local col = (i - 1) % 3
       local row = math.floor((i - 1) / 3)
       local b = BP.UI.Button(c, 118, 22, m.name, function()
-         if BP.Bot.disabled then
-            BP.Warn("AutoTravel steuert den Playerbot - der Modus gilt hier nicht.")
-            return
-         end
-         BP.Bot.SetMode(m.key)
+         BP.Bot.SetMode(m.key)             -- unter AutoTravel lehnt es selbst ab
       end)
       b:SetPoint("TOPLEFT", 20 + col * 126, y - row * 26)
       b.modeKey = m.key
@@ -264,7 +282,7 @@ local function Build()
    table.insert(gated, reset)
    Advance(26)
 
-   Check(c, "Eigene Botbefehle und Protokollzeilen im Chat verbergen",
+   O.hideBox = Check(c, "Eigene Botbefehle und Protokollzeilen im Chat verbergen",
          "Blendet die Fluesterbefehle an den eigenen Charakter und die [AT]-Zeilen des Servermoduls aus. " ..
          "Zum Fehlersuchen ausschalten.",
          16, y, "HideCommands")
@@ -277,8 +295,7 @@ local function Build()
             BP.Set("SelfCommand", BP.DEFAULTS.SelfCommand)
             BP.Print("Umschaltbefehl: " .. BP.DEFAULTS.SelfCommand)
          elseif not BP.IsServerCommand(text) then
-            BP.Warn("Der Befehl muss mit einem Punkt beginnen (z. B. .playerbots bot self). " ..
-                    "Ohne Punkt wuerde der Charakter ihn laut sagen.")
+            BP.Warn(BP.NOT_A_COMMAND)
          else
             BP.Set("SelfCommand", text)
             BP.Print("Umschaltbefehl: " .. text)
@@ -309,13 +326,15 @@ local function Build()
          return id and tostring(id) or ""
       end,
       function(text)
-         local id = tonumber(text)
-         if id and id > 0 then
-            BP.Set("ForcedMapId", math.floor(id))
-            BP.Print("Karten-ID erzwungen: " .. math.floor(id))
-         else
+         if text == "" or text == "0" then
             BP.Set("ForcedMapId", nil)
             BP.Print("Karten-ID wieder automatisch.")
+         elseif string.match(text, "^%d+$") and tonumber(text) <= 99999 then
+            BP.Set("ForcedMapId", tonumber(text))
+            BP.Print("Karten-ID erzwungen: " .. tonumber(text))
+         else
+            -- Kein stilles Loeschen: "1 2" oder "abc" ist ein Tippfehler, keine Absicht
+            BP.Warn("Keine gueltige Karten-ID: '" .. text .. "' (eine ganze Zahl; leer oder 0 = automatisch).")
          end
       end)
    Advance(44)
@@ -337,18 +356,13 @@ local function Build()
          16, y, "Debug")
    Advance(34)
 
-   local all = BP.UI.Button(c, 220, 22, "Alle Einstellungen zuruecksetzen", function()
-      BP.ResetSettings()
-      BP.Print("Einstellungen auf die Voreinstellung zurueckgesetzt.")
-      BP.UI.Refresh()
-      BP.UI.Update()
-      O.Load()
-   end)
+   local all = BP.UI.Button(c, 220, 22, "Alle Einstellungen zuruecksetzen", function() O.ResetAll() end)
    all:SetPoint("TOPLEFT", 20, y)
    all.tip = function()
       GameTooltip:AddLine("Alle Einstellungen zuruecksetzen")
-      GameTooltip:AddLine("Setzt Modus, Umschaltbefehl und die Haken auf die Voreinstellung. " ..
-                          "Fensterposition und Sichtbarkeit bleiben.", 0.7, 0.7, 0.7, true)
+      GameTooltip:AddLine("Setzt Modus, Umschaltbefehl, Karten-ID und die Haken (auch den fuer den " ..
+                          "Minimap-Knopf) auf die Voreinstellung. Fensterposition, Knopfwinkel und ob " ..
+                          "das Fenster angezeigt wird bleiben.", 0.7, 0.7, 0.7, true)
    end
    Advance(36)
 
@@ -357,6 +371,7 @@ local function Build()
    frame.refresh = function() O.Load() end
    frame.okay    = function() end
    frame.cancel  = function() end
+   frame.default = function() O.ResetAll() end       -- "Standard" im Optionsfenster
    frame:SetScript("OnShow", function() O.Load() end)
 
    if InterfaceOptions_AddCategory then
@@ -377,6 +392,13 @@ function O.Load()
    RefreshModes()
    ApplyGating()
    if O.status then O.status:SetText(StatusText()) end
+end
+
+function O.ResetAll()
+   BP.ResetSettings()
+   BP.Print("Einstellungen auf die Voreinstellung zurueckgesetzt.")
+   if BP.UI then BP.UI.Refresh() BP.UI.Update() end
+   O.Load()
 end
 
 -- Von Befehlen und Fenster aus aufrufbar, auch bevor die Seite gebaut ist.

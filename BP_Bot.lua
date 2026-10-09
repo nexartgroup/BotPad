@@ -70,7 +70,10 @@ function B.Find(key)
    for _, m in ipairs(B.Modes) do
       if m.key == key then return m end
    end
-   return B.Modes[2]        -- Normal
+   for _, m in ipairs(B.Modes) do
+      if m.key == "normal" then return m end
+   end
+   return B.Modes[1]
 end
 
 function B.Current()
@@ -201,10 +204,15 @@ function B.OnSystemMessage(msg)
       -- Strategiebefehle dahinter waeren sinnlos, die Fristueberwachung soll
       -- nicht zusaetzlich meckern.
       B.running = false
+      local mine = (watchUntil ~= 0)
       watchUntil = 0
       B.DropWhispers()
-      BP.Warn("Der Server verweigert den Selbstmodus: " .. msg ..
-              " (AiPlayerbot.SelfBotLevel in der Serverkonfiguration)")
+      -- Mit AutoTravel meldet dieses die Verweigerung selbst; Botpad nur, wenn es
+      -- gerade selbst umgeschaltet hat.
+      if mine or not BP.autoTravel then
+         BP.Warn("Der Server verweigert den Selbstmodus: " .. msg ..
+                 " (AiPlayerbot.SelfBotLevel in der Serverkonfiguration)")
+      end
       if BP.UI then BP.UI.Update() end
       return true
    end
@@ -256,7 +264,15 @@ end)
 -- ohne KI antwortet niemand auf die Fluesterbefehle, und aus einem Klick wurden
 -- zehn gedrosselte Nachrichten.
 function SendToggle(want, isRetry)
-   B.SendCommand(BP.Get("SelfCommand") or ".playerbots bot self")
+   -- Nie ohne Punkt senden: es ginge als gewoehnlicher Chat hinaus (die Pruefung steht
+   -- schon bei der Eingabe und beim Laden, das hier ist der letzte Riegel).
+   local cmd = BP.Get("SelfCommand")
+   if not BP.IsServerCommand(cmd) then
+      BP.Warn(BP.NOT_A_COMMAND)
+      cmd = BP.DEFAULTS.SelfCommand
+      BP.Set("SelfCommand", cmd)
+   end
+   B.SendCommand(cmd)
    if not isRetry then watchRetried = false end
    watchWant = want
    watchUntil = GetTime() + 6
@@ -289,12 +305,20 @@ function B.ApplyMode(silent)
 end
 
 function B.SetMode(key)
+   if B.disabled then
+      -- AutoTravel steuert die Strategien: ein gespeicherter Modus wuerde nichts
+      -- bewirken und eine Erfolgsmeldung waere falsch.
+      BP.Warn("AutoTravel steuert den Playerbot - der Modus gilt nicht.")
+      if BP.UI then BP.UI.Update() end
+      return false
+   end
    BP.Set("Mode", key)
    local m = B.Current()
    BP.Print("Modus: |cffffffff" .. m.name .. "|r - " .. m.desc)
    if B.running then B.ApplyMode(true) end
    if BP.UI then BP.UI.Update() end
    if BP.Options then BP.Options.Refresh() end
+   return true
 end
 
 -- Beim Ausschalten die Strategien zuruecksetzen, damit der Charakter nicht

@@ -29,7 +29,7 @@ local DEFAULTS = {
    HideCommands = 1,
    ResetOnStop  = 1,
    ConfirmTp    = 1,
-   MinimapAngle = 210,
+   MinimapAngle = 160,         -- AutoTravel sitzt bei 200: nicht uebereinander
    MinimapButton = 1,
    Shown        = 1,
    Debug        = 0,
@@ -52,20 +52,30 @@ function BP.GetBool(k) local v = BP.Get(k) return v == 1 or v == true end
 -- Alle Einstellungen auf die Voreinstellung. Die Fensterposition, der Knopfwinkel und
 -- die Sichtbarkeit des Fensters bleiben, wie sie sind: das ist keine Einstellung,
 -- die man "zuruecksetzen" will.
-local KEEP = { Point = true, MinimapAngle = true, Shown = true }
+local KEEP = { MinimapAngle = true, Shown = true }
 function BP.ResetSettings()
    BotpadDB = BotpadDB or {}
+   local oldMode = BotpadDB.Mode
    for k, v in pairs(DEFAULTS) do
       if not KEEP[k] then BotpadDB[k] = v end
    end
    BotpadDB.ForcedMapId = nil
+   -- Laeuft der Selbstmodus, gilt der zurueckgesetzte Modus auch gleich fuer den Bot
+   -- (wie bei BP.Bot.SetMode), sonst zeigt das Fenster Normal und der Bot macht Grind.
+   if BP.Bot and BP.Bot.running and not BP.Bot.disabled and oldMode ~= BotpadDB.Mode then
+      BP.Bot.ApplyMode(true)
+   end
 end
 
 -- Der Umschaltbefehl geht als Chatnachricht hinaus (SAY). Ohne fuehrenden Punkt wuerde
 -- der Charakter ihn laut sagen, statt dass der Server ihn als Befehl liest.
+-- ChatHandler::ParseCommands nimmt '.' und '!' als Vorsatz, ignoriert aber eine
+-- Nachricht, deren zweites Zeichen dasselbe Zeichen oder ein Leerzeichen ist.
 function BP.IsServerCommand(text)
-   return type(text) == "string" and string.match(text, "^%.%S") ~= nil
+   return type(text) == "string" and string.match(text, "^[%.!][^%.!%s]") ~= nil
 end
+BP.NOT_A_COMMAND = "Der Befehl muss mit einem Punkt beginnen (z. B. .playerbots bot self). " ..
+                   "Ohne Punkt wuerde der Charakter ihn laut sagen."
 
 function BP.Print(m) if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. tostring(m or "")) end end
 function BP.Warn(m)  if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. "|cffff8800" .. tostring(m or "") .. "|r") end end
@@ -186,12 +196,19 @@ local function OnHello(body)
 
    if (tonumber(enabled) or 1) == 0 then
       s.state = "DISABLED"
+      local mine = (pendingTp ~= nil)
       pendingTp = nil
-      BP.Warn("mod-autotravel ist auf diesem Server abgeschaltet.")
+      -- Ist AutoTravel geladen, kommt dieselbe Antwort auf dessen Handschlag beim
+      -- Anmelden, und AutoTravel meldet es selbst. Nur warnen, wenn Botpad gefragt hat.
+      if mine or not BP.autoTravel then
+         BP.Warn("mod-autotravel ist auf diesem Server abgeschaltet.")
+      end
+      if BP.Options then BP.Options.Refresh() end
       return
    end
 
    s.state = "READY"
+   if BP.Options then BP.Options.Refresh() end
    if pendingTp then
       local p = pendingTp
       pendingTp = nil
@@ -274,6 +291,12 @@ chat:SetScript("OnEvent", function(self, event, arg1, arg2)
          if BotpadDB.SelfCommand == ".playerbot bot self" then
             BotpadDB.SelfCommand = DEFAULTS.SelfCommand
          end
+         -- Fassungen vor 1.2 nahmen auch einen Befehl ohne Punkt an; der ginge als
+         -- gewoehnliche Chatnachricht hinaus. Auf den Standard zuruecksetzen.
+         if not BP.IsServerCommand(BotpadDB.SelfCommand) then
+            BP.badSavedCommand = BotpadDB.SelfCommand
+            BotpadDB.SelfCommand = DEFAULTS.SelfCommand
+         end
       end
       return
    end
@@ -292,6 +315,12 @@ chat:SetScript("OnEvent", function(self, event, arg1, arg2)
       if BP.UI then BP.UI.Build() end
       if BP.Options then BP.Options.Init() end
       BP.Print("v" .. BP.VERSION .. " geladen. /botpad fuer Hilfe.")
+      if BP.badSavedCommand then
+         BP.Warn("Der gespeicherte Umschaltbefehl '" .. tostring(BP.badSavedCommand) ..
+                 "' beginnt nicht mit einem Punkt und wurde auf " .. DEFAULTS.SelfCommand ..
+                 " zurueckgesetzt (er waere als Chat gesendet worden).")
+         BP.badSavedCommand = nil
+      end
       if not BP.Carb.IsAvailable() then
          BP.Warn("Carbonite nicht gefunden - der Teleport braucht es als Zielquelle.")
       end
@@ -328,14 +357,18 @@ end)
 -- Eigene Botbefehle nicht im Chat anzeigen
 local function Filter(a1, a2, a3)
    if not BP.GetBool("HideCommands") then return false end
-   local msg
-   if type(a1) == "string" then msg = a2 else msg = a3 end
+   -- (self, event, msg, ...) in 3.3.5a; die aeltere Form ohne self kommt auch durch
+   local event, msg
+   if type(a1) == "string" then event, msg = a1, a2 else event, msg = a2, a3 end
    if BP.Bot.IsOwnCommand(msg) then return true end
    -- Protokollzeilen des Servermoduls ebenfalls verbergen -- auch die Textmeldungen
    -- ([AT]M): Botpad gibt sie selbst mit seinem Vorsatz aus, sonst stuenden sie
    -- doppelt im Chat. Ist AutoTravel geladen, entscheidet dessen Einstellung
    -- (HideProtocol), nicht diese.
-   if type(msg) == "string" and string.sub(msg, 1, 4) == "[AT]" and not BP.autoTravel then
+   -- Nur Systemmeldungen: ein Fluestern eines anderen Spielers, das mit "[AT]"
+   -- beginnt, soll sichtbar bleiben (der Handler verwirft es ohnehin).
+   if event == "CHAT_MSG_SYSTEM" and type(msg) == "string"
+      and string.sub(msg, 1, 4) == "[AT]" and not BP.autoTravel then
       return true
    end
    return false
@@ -385,8 +418,7 @@ SlashCmdList["BOTPAD"] = function(input)
    elseif cmd == "befehl" then
       if rest ~= "" then
          if not BP.IsServerCommand(rest) then
-            BP.Warn("Der Befehl muss mit einem Punkt beginnen (z. B. .playerbots bot self). " ..
-                    "Ohne Punkt wuerde der Charakter ihn laut sagen.")
+            BP.Warn(BP.NOT_A_COMMAND)
          else
             BP.Set("SelfCommand", rest)
             BP.Print("Umschaltbefehl: " .. rest)
@@ -407,14 +439,33 @@ SlashCmdList["BOTPAD"] = function(input)
       BP.Print("Sicherheitsabfrage " .. (BP.GetBool("ConfirmTp") and "AN" or "AUS"))
       if BP.Options then BP.Options.Refresh() end
 
+   elseif cmd == "knopf" then
+      BP.Set("MinimapButton", BP.GetBool("MinimapButton") and 0 or 1)
+      BP.Print("Minimap-Knopf " .. (BP.GetBool("MinimapButton") and "AN" or "AUS"))
+      if BP.UI then BP.UI.Refresh() end
+      if BP.Options then BP.Options.Refresh() end
+
+   elseif cmd == "strategien" then
+      BP.Set("ResetOnStop", BP.GetBool("ResetOnStop") and 0 or 1)
+      BP.Print("Strategien beim Ausschalten zuruecksetzen: " .. (BP.GetBool("ResetOnStop") and "AN" or "AUS"))
+      if BP.Options then BP.Options.Refresh() end
+
+   elseif cmd == "verbergen" then
+      BP.Set("HideCommands", BP.GetBool("HideCommands") and 0 or 1)
+      BP.Print("Botbefehle im Chat verbergen: " .. (BP.GetBool("HideCommands") and "AN" or "AUS"))
+      if BP.Options then BP.Options.Refresh() end
+
    elseif cmd == "optionen" or cmd == "options" or cmd == "einstellungen" then
       if BP.Options then BP.Options.Open() end
 
    elseif cmd == "standard" or cmd == "reset" then
-      BP.ResetSettings()
-      BP.Print("Einstellungen auf die Voreinstellung zurueckgesetzt.")
-      if BP.UI then BP.UI.Refresh() BP.UI.Update() end
-      if BP.Options then BP.Options.Refresh() end
+      if BP.Options and BP.Options.ResetAll then
+         BP.Options.ResetAll()
+      else
+         BP.ResetSettings()
+         BP.Print("Einstellungen auf die Voreinstellung zurueckgesetzt.")
+         if BP.UI then BP.UI.Refresh() BP.UI.Update() end
+      end
 
    elseif cmd == "debug" then
       BP.Set("Debug", BP.GetBool("Debug") and 0 or 1)
@@ -440,6 +491,9 @@ SlashCmdList["BOTPAD"] = function(input)
          "/bp befehl <text>  Umschaltbefehl anpassen",
          "/bp karte <id>     Karten-ID erzwingen (0 = automatisch)",
          "/bp nachfrage      Sicherheitsabfrage vor Teleport",
+         "/bp knopf          Minimap-Knopf ein/aus",
+         "/bp strategien     Strategien beim Ausschalten zuruecksetzen ein/aus",
+         "/bp verbergen      Botbefehle im Chat verbergen ein/aus",
          "/bp optionen       Einstellungsseite (Interface -> AddOns -> Botpad)",
          "/bp standard       Einstellungen auf die Voreinstellung",
          "/bp info           Version, Verbindung, Berechtigung",

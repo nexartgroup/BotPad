@@ -50,10 +50,13 @@ The addon targets the **3.3.5a client (Interface 30300)** and stores its setting
   * `/botpad`
   * `/bp`
   * `/bp info` — version, module connection, teleport permission, self-mode state
+  * `/bp optionen` — open the settings page; `/bp standard` — reset all settings
+  * `/bp knopf` (minimap button), `/bp strategien` (reset strategies on stop), `/bp verbergen` (hide command echoes) — toggles for the matching settings
 
 * 🔇 **Chat filtering**
 
-  * Hides BotPad's own Playerbot commands and relevant server-module protocol messages from normal chat when enabled.
+  * With *Hide bot commands* on (`HideCommands`, the default) BotPad hides its own Playerbot commands and the server module's `[AT]` protocol lines from normal chat. The module's text messages (`[AT]M`) are shown once, with the "Botpad:" prefix.
+  * With the option off, nothing is hidden: the raw `[AT]` lines appear in chat as well, so module messages show up twice.
 
 ## Requirements
 
@@ -88,6 +91,7 @@ World of Warcraft/
             ├── BP_Carbonite.lua
             ├── BP_Core.lua
             ├── BP_MapIds.lua
+            ├── BP_Options.lua
             └── BP_UI.lua
 ```
 
@@ -251,12 +255,14 @@ Default settings include:
 | `HideCommands` |                   `1` | Hide BotPad command echoes         |
 | `ResetOnStop`  |                   `1` | Reset bot strategies when stopping |
 | `ConfirmTp`    |                   `1` | Ask before teleporting             |
-| `MinimapAngle` |                 `210` | Minimap position setting           |
+| `MinimapAngle` |                 `160` | Minimap button position (degrees)  |
 | `MinimapButton` |                  `1` | Show the minimap button            |
 | `Shown`        |                   `1` | Whether the panel is visible       |
 | `Debug`        |                   `0` | Enable debug messages              |
 
 The panel position is also saved when the window is moved. `ForcedMapId` (see `/bp karte`) is only present while a map ID is forced.
+
+The same values are on the settings page; `/bp standard` (or the reset button there) restores the defaults above and removes `ForcedMapId`. The window position, `MinimapAngle` and `Shown` are kept.
 
 The toggle command (`SelfCommand`, `/bp befehl <text>`) is sent as a chat message, so it must start with a dot (`.playerbots bot self`). Without the dot the character would say it out loud; BotPad refuses such input.
 
@@ -296,12 +302,13 @@ BotPad/
 ├── BP_Bot.lua          # Playerbot modes, commands and state handling
 ├── BP_Carbonite.lua    # Carbonite destination integration
 ├── BP_MapIds.lua       # Zone → WoW map ID resolution
-├── BP_UI.lua            # In-game control panel
+├── BP_UI.lua           # In-game control panel
 ├── BP_Options.lua      # Settings page (Interface → AddOns → Botpad)
+├── tests/              # Offline test suite (see "Testing without the game")
 └── LICENSE             # GPL-3.0
 ```
 
-The addon loads the Carbonite and map-resolution modules before the Playerbot, core, and UI modules. 
+The addon loads the Carbonite and map-resolution modules first, then the Playerbot and core modules, the control panel, and the settings page last (it reads the other modules' state). 
 
 ## Troubleshooting
 
@@ -339,6 +346,8 @@ Use either BotPad or AutoTravel for the Playerbot, not both: each would send the
 
 In that case BotPad also leaves the server module's text messages and protocol lines to AutoTravel: it neither prints the messages a second time nor hides the lines (AutoTravel's own "hide protocol lines" setting decides). The settings page shows a notice and greys out the mode buttons and "reset strategies on stop".
 
+BotPad detects AutoTravel only by whether it is loaded, not by its settings. If you switched AutoTravel's own bot control off (`BotControl = 0`) BotPad still leaves the strategies alone; disable AutoTravel instead if you want BotPad to manage them.
+
 ### Playerbot toggle does not work
 
 Check the command configured for self-mode:
@@ -364,9 +373,12 @@ You can also enable debugging:
 ## Changes in 1.2
 
 * **Settings page** under Interface → AddOns → Botpad (see above); new setting `MinimapButton`; `/bp optionen`, `/bp standard`.
-* **No more doubled messages.** The text messages of the server module were printed twice (the raw `[AT]M|…` line and again with the "Botpad:" prefix). BotPad now hides the raw line when it prints it itself; with AutoTravel loaded it prints nothing and filters nothing, AutoTravel does.
+* **No more doubled messages** (with *Hide bot commands* on). The text messages of the server module were printed twice (the raw `[AT]M|…` line and again with the "Botpad:" prefix). BotPad now hides the raw line when it prints it itself; with AutoTravel loaded it prints nothing and filters nothing, AutoTravel does. With the option off the raw lines stay visible, by design.
+* **Mode lock with AutoTravel.** Choosing a mode (panel dropdown, `/bp modus`, settings page) is refused with a notice while AutoTravel is loaded; the panel dropdown keeps showing the saved mode.
 * **With AutoTravel loaded** switching the bot off no longer sends `nc !` / `co !` / `ll normal` (BotPad does not manage strategies then).
-* **`/bp befehl` and the settings field refuse a command without a leading dot**, which the client would send as ordinary chat.
+* **`/bp befehl` and the settings field refuse a command without a leading dot** (`.` or `!` followed by the command name), which the client would send as ordinary chat. A saved command without a valid prefix is replaced by the default on load.
+* **Minimap button** can be hidden (`MinimapButton`, `/bp knopf`); Shift+click on it opens the settings, right click toggles the window, left click toggles the bot.
+* **`/bp standard`** also re-applies the default mode to a running bot.
 
 ## Compatibility
 
