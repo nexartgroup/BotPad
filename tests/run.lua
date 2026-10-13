@@ -208,7 +208,11 @@ end)
 test("Einschalten wendet den Modus an (drei Strategiebefehle nach dem Reset)", function()
    boot()
    W.ServerLine("SelfBot is now active.")
-   W.Advance(5)
+   W.Advance(10)
+   local early = 0
+   for _, s in ipairs(W.sent) do if s.channel == "WHISPER" then early = early + 1 end end
+   eq(early, 0, "in den ersten 10 s hoert der frisch eingeschaltete Bot nicht zu: noch nichts gesendet")
+   W.Advance(15)
    local whispers = 0
    for _, s in ipairs(W.sent) do if s.channel == "WHISPER" then whispers = whispers + 1 end end
    eq(whispers, 6, "3 Reset + nc, co, ll")
@@ -251,7 +255,7 @@ test("Umschalter bei unbekanntem Zustand: Gegenteil bestaetigt -> einmal erneut 
    W.Advance(1)
    eq(count(".playerbots bot self"), 2, "ein zweiter Umschalter")
    W.ServerLine("SelfBot is now active.")
-   W.Advance(5)
+   W.Advance(20)
    eq(B.running, true, "Endzustand an")
    eq(count(".playerbots bot self"), 2, "nicht noch ein dritter")
    local whispers = 0
@@ -858,7 +862,7 @@ test("Zuruecksetzen wendet den Modus auf einen laufenden Bot an", function()
    boot()
    BotpadDB.Mode = "grind"
    W.ServerLine("SelfBot is now active.")
-   W.Advance(5)
+   W.Advance(20)
    W.ClearSent()
    SlashCmdList["BOTPAD"]("standard")
    W.Advance(5)
@@ -1137,7 +1141,7 @@ test("Halt aufgehoben: die naechste Einschaltmeldung wendet den Modus wieder an"
    Botpad.Bot.Release("Fishing Buddy")
    check(not Botpad.Bot.IsHeld(), "nicht mehr gehalten")
    W.ServerLine("SelfBot is now active.")
-   W.Advance(5)
+   W.Advance(20)
    eq(whisperCount(), 6, "3 Reset + nc, co, ll wie sonst")
 end)
 
@@ -1225,12 +1229,44 @@ end)
 
 test("Halt: wartende Botpad-Fluesterbefehle werden verworfen", function()
    boot()
-   W.ServerLine("SelfBot is now active.")          -- Botpad reiht seinen Modus ein
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(20)
+   W.ClearSent()
+   Botpad.Bot.SetMode("grind")                      -- reiht ll, nc !, co !, nc, co, ll ein (gedrosselt)
+   W.Advance(0.5)
    local before = whisperCount()
    Botpad.Bot.Hold("Fishing Buddy")
    W.Advance(20)
    eq(whisperCount(), before, "nach dem Halt kommt nichts mehr nach")
-   check(before < 6, "Voraussetzung: beim Halt war noch etwas in der Warteschlange")
+   check(before >= 1 and before < 6, "Voraussetzung: beim Halt war noch etwas in der Warteschlange")
+end)
+
+test("Einschalten: der Modus kommt erst, wenn der Bot zuhoert; Ausschalten oder Halt davor streicht ihn", function()
+   boot()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   W.ServerLine("SelfBot is now deactivated.")
+   W.Advance(30)
+   eq(whisperCount(), 0, "ausgeschaltet vor Ablauf der Wartezeit: nichts gesendet")
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(2)
+   Botpad.Bot.Hold("Fishing Buddy")
+   W.messages = {}
+   W.Advance(30)
+   eq(whisperCount(), 0, "im Halt: nichts gesendet")
+   check(not warned("nicht auf den Bot angewandt"), "und still")
+end)
+
+test("Halt: eine Verweigerung des Servers meldet das andere Addon, Botpad schweigt", function()
+   boot()
+   Botpad.Bot.Hold("Fishing Buddy")
+   W.messages = {}
+   W.ServerLine("SelfBot is disabled server-wide.")
+   check(not warned("Der Server verweigert den Selbstmodus"), "keine doppelte Meldung")
+   Botpad.Bot.Release("Fishing Buddy")
+   W.messages = {}
+   W.ServerLine("SelfBot is disabled server-wide.")
+   check(warned("Der Server verweigert den Selbstmodus"), "ohne Halt meldet Botpad die Verweigerung selbst")
 end)
 
 test("Halt: ein Fehler beim Neuzeichnen bringt Hold/Release nicht zum Absturz", function()
@@ -1262,6 +1298,98 @@ test("Halt: /bp info und die Einstellungsseite nennen den Halter, /bp freigeben 
    W.messages = {}
    SlashCmdList["BOTPAD"]("freigeben")
    check(warned("niemand"), "ohne Halt: sagt es")
+end)
+
+test("P1 Halt: der Hinweis 'nicht angewandt' kommt nach mehr als einer Minute wieder", function()
+   boot()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   Botpad.Bot.Hold("Fishing Buddy")
+   Botpad.Set("Mode", "grind")
+   W.messages = {}
+   Botpad.ResetSettings()                       -- grind -> normal, Bot laeuft: ApplyMode -> NoteHeld
+   check(warned("nicht auf den Bot angewandt"), "erste Meldung")
+   W.Advance(61)
+   Botpad.Set("Mode", "grind")
+   W.messages = {}
+   Botpad.ResetSettings()
+   check(warned("nicht auf den Bot angewandt"), "nach 61 s wieder")
+end)
+
+test("P2 Halt: mehrere Halter stehen sortiert und vollstaendig in der Meldung", function()
+   boot()
+   for _, n in ipairs({ "Fishing Buddy", "Zeta", "AutoTravel", "My Addon", "alpha" }) do Botpad.Bot.Hold(n) end
+   eq(Botpad.Bot.HolderNames(), "AutoTravel, Fishing Buddy, My Addon, Zeta, alpha", "alle Namen, sortiert")
+end)
+
+test("P3 Halt: Hold verwirft nur Fluesterbefehle, nicht den wartenden Umschalter", function()
+   boot()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   W.ClearSent()
+   Botpad.Bot.Toggle()                          -- ll normal, nc !, co !, dann der Umschalter
+   Botpad.Bot.Hold("Fishing Buddy")
+   W.Advance(5)
+   eq(count(".playerbots bot self"), 1, "der Umschalter geht trotzdem hinaus")
+end)
+
+test("P4 Halt: die Einschaltmeldung beendet die Fristueberwachung auch im Halt", function()
+   boot()
+   Botpad.Bot.Toggle()                          -- BOT EIN von Hand (Zustand unbekannt)
+   W.Advance(1)
+   Botpad.Bot.Hold("Fishing Buddy")
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(1)
+   W.ServerLine("SelfBot is now deactivated.")  -- jemand anderes schaltet aus
+   W.Advance(8)
+   eq(count(".playerbots bot self"), 1, "Botpad schaltet nicht noch einmal um")
+   eq(Botpad.Bot.running, false, "Zustand aus")
+end)
+
+test("P5 Halt: Release frischt die Einstellungsseite auf", function()
+   boot()
+   Botpad.Bot.Hold("Fishing Buddy")
+   check(Botpad.Options.status:GetText():find("gehalten von Fishing Buddy", 1, true), "Seite zeigt den Halter")
+   Botpad.Bot.Release("Fishing Buddy")
+   check(not Botpad.Options.status:GetText():find("gehalten", 1, true), "Seite zeigt keinen Halter mehr")
+end)
+
+test("P6 Halt: weder Ein-/Ausschaltmeldungen noch ResetSettings heben ihn auf", function()
+   boot()
+   Botpad.Bot.Hold("Fishing Buddy")
+   W.ServerLine("SelfBot is now active.")
+   W.ServerLine("SelfBot is now deactivated.")
+   Botpad.ResetSettings()
+   check(Botpad.Bot.IsHeld(), "noch gehalten")
+end)
+
+test("P7 Halt: SetMode im Halt gibt keine zweite Meldung 'nicht angewandt' aus", function()
+   boot()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   Botpad.Bot.Hold("Fishing Buddy")
+   W.messages = {}
+   Botpad.Bot.SetMode("grind")
+   check(not warned("nicht auf den Bot angewandt"), "nur die eine Meldung 'Modus gespeichert'")
+end)
+
+test("P8 Halt: ApplyMode sendet unter AutoTravel (disabled) nichts", function()
+   boot()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   W.ClearSent()
+   Botpad.Bot.disabled = true
+   Botpad.Bot.ApplyMode(true)
+   W.Advance(5)
+   eq(whisperCount(), 0, "nichts an den Bot")
+end)
+
+test("P9 Halt: ein Halter mit Zahl als Name bringt HolderNames nicht zum Absturz", function()
+   boot()
+   Botpad.Bot.Hold("A")
+   Botpad.Bot.Hold(1)
+   local ok, err = pcall(Botpad.Bot.HolderNames)
+   check(ok, "HolderNames: " .. tostring(err))
 end)
 
 test("kein Modus nimmt dem Bot die Strategie 'chat' (sie nimmt alle Chatbefehle an)", function()

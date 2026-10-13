@@ -207,6 +207,14 @@ end
 
 local watchUntil = 0      -- Frist fuer die Bestaetigung; VOR den Funktionen, die sie lesen
 
+-- Ein frisch eingeschalteter Selbstbot hoert etwa 10 s lang auf keinen Chatbefehl (sein erster
+-- KI-Takt ist ein "minimaler", danach pausiert er: PlayerbotAI PassiveDelay). Was in dieser Zeit
+-- ankommt, arbeitet er in EINEM Takt ab -- und der "nc"- wie der "co"-Ausloeser behaelt nur den
+-- LETZTEN Parameter. "nc !" gefolgt vom Modus waere also verloren. Deshalb wird der Modus erst
+-- angewandt, wenn der Bot zuhoert.
+local ACTIVATION_DELAY = 12.5
+local applyAt = nil
+
 -- Die Meldungen von mod-playerbots haben sich geaendert. Heute (PlayerbotMgr.cpp,
 -- Befehl "self"):
 --     "SelfBot is now active."                       eingeschaltet
@@ -264,9 +272,9 @@ function B.OnSystemMessage(msg)
       local mine = (watchUntil ~= 0)
       watchUntil = 0
       B.DropWhispers()
-      -- Mit AutoTravel meldet dieses die Verweigerung selbst; Botpad nur, wenn es
-      -- gerade selbst umgeschaltet hat.
-      if mine or not BP.autoTravel then
+      -- Mit AutoTravel meldet dieses die Verweigerung selbst, mit einem Halter (Fishing
+      -- Buddy) dieser; Botpad nur, wenn es gerade selbst umgeschaltet hat.
+      if mine or (not BP.autoTravel and not B.IsHeld()) then
          BP.Warn("Der Server verweigert den Selbstmodus: " .. msg ..
                  " (AiPlayerbot.SelfBotLevel in der Serverkonfiguration)")
       end
@@ -276,14 +284,16 @@ function B.OnSystemMessage(msg)
 
    if MatchAny(low, ON_PATTERNS) then
       B.running = true
+      applyAt = nil
       if not Reconcile() and not B.disabled and not B.IsHeld() then
-         B.ApplyMode(true)       -- Strategien passend zum Modus setzen
+         applyAt = GetTime() + ACTIVATION_DELAY      -- Strategien passend zum Modus setzen, sobald der Bot zuhoert
       end       -- (gehalten: still -- das andere Addon hat selbst eingeschaltet)
       if BP.UI then BP.UI.Update() end
       return true
    end
    if MatchAny(low, OFF_PATTERNS) then
       B.running = false
+      applyAt = nil
       Reconcile()
       if BP.UI then BP.UI.Update() end
       return true
@@ -304,6 +314,10 @@ end
 local watchdog = CreateFrame("Frame")
 
 watchdog:SetScript("OnUpdate", function()
+   if applyAt and GetTime() >= applyAt then
+      applyAt = nil
+      if B.running and not B.disabled and not B.IsHeld() then B.ApplyMode(true) end
+   end
    if watchUntil == 0 then return end
    if GetTime() < watchUntil then return end
    watchUntil = 0
@@ -342,7 +356,9 @@ function B.Toggle()
    if not want and BP.GetBool("ResetOnStop") then
       -- Wer den Bot von Hand ausschaltet, will ihn auch zurueckgesetzt haben: sonst
       -- bliebe die Strategie des anderen Addons beim Bot gespeichert (der Server
-      -- laedt sie beim naechsten Einschalten wieder).
+      -- laedt sie beim naechsten Einschalten wieder). Das gelingt nur nach Kraeften:
+      -- ein Bot, der gerade auf einen Schwimmer wartet, liest seine Befehle erst
+      -- nach Sekunden, und der Umschalter baut ihn vorher ab.
       B.ResetStrategies(true)
    end
    SendToggle(want, false)
