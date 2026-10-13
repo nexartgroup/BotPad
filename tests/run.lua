@@ -497,7 +497,7 @@ test("die Einstellungsseite erscheint unter Interface -> AddOns -> Botpad", func
    eq(added[1].name, "Botpad", "Name in der Liste")
    check(_G.BotpadOptionsScroll ~= nil, "in einem ScrollFrame")
    check(Botpad.Options and Botpad.Options.Open, "Open vorhanden")
-   eq(Botpad.VERSION, "1.2", "Version")
+   eq(Botpad.VERSION, "1.3", "Version")
 end)
 
 test("Haken: Voreinstellungen angezeigt, Klick schreibt in die BotpadDB", function()
@@ -1109,6 +1109,110 @@ test("mit dem echten AutoTravel zusammen: jede Meldung genau einmal", function()
 
    -- Botpad setzt keine Strategien (AutoTravel schickt seinen Satz selbst)
    eq(Botpad.Bot.disabled, true, "Strategiesteuerung bei Botpad aus")
+end)
+
+-- ---------------------------------------------------------------------------
+-- Halt fuer andere Addons (Fishing Buddy setzt eigene Strategien)
+-- ---------------------------------------------------------------------------
+
+local function whisperCount()
+   local n = 0
+   for _, x in ipairs(W.sent) do if x.channel == "WHISPER" then n = n + 1 end end
+   return n
+end
+
+test("Halt: fremde Einschaltmeldung loest keinen Modus aus, der Zustand wird trotzdem erkannt", function()
+   boot()
+   Botpad.Bot.Hold("Fishing Buddy")
+   check(Botpad.Bot.IsHeld(), "gehalten")
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   eq(whisperCount(), 0, "kein nc !, co !, Modus, ll")
+   eq(Botpad.Bot.running, true, "Zustand erkannt")
+end)
+
+test("Halt aufgehoben: die naechste Einschaltmeldung wendet den Modus wieder an", function()
+   boot()
+   Botpad.Bot.Hold("Fishing Buddy")
+   Botpad.Bot.Release("Fishing Buddy")
+   check(not Botpad.Bot.IsHeld(), "nicht mehr gehalten")
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   eq(whisperCount(), 6, "3 Reset + nc, co, ll wie sonst")
+end)
+
+test("Halt: mehrere Halter, erst der letzte Release gibt frei", function()
+   boot()
+   Botpad.Bot.Hold("A")
+   Botpad.Bot.Hold("B")
+   Botpad.Bot.Release("A")
+   check(Botpad.Bot.IsHeld(), "B haelt noch")
+   eq(Botpad.Bot.HolderNames(), "B", "Name")
+   Botpad.Bot.Release("B")
+   check(not Botpad.Bot.IsHeld(), "frei")
+   Botpad.Bot.Release("C")                 -- unbekannter Halter: kein Fehler
+   check(not Botpad.Bot.IsHeld(), "weiterhin frei")
+end)
+
+test("Halt: Modus waehlen speichert nur und sagt, warum nichts gesendet wird", function()
+   boot()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   W.ClearSent()
+   Botpad.Bot.Hold("Fishing Buddy")
+   local ok = Botpad.Bot.SetMode("grind")
+   eq(ok, true, "SetMode gelingt")
+   eq(BotpadDB.Mode, "grind", "gespeichert")
+   W.Advance(5)
+   eq(whisperCount(), 0, "nichts an den Bot")
+   check(warned("gilt nicht, solange Fishing Buddy"), "Hinweis mit dem Namen des Halters")
+end)
+
+test("Halt: Ausschalten setzt die Strategien nicht zurueck, der Umschalter geht trotzdem hinaus", function()
+   boot()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   W.ClearSent()
+   Botpad.Bot.Hold("Fishing Buddy")
+   Botpad.Bot.Toggle()
+   W.Advance(5)
+   eq(whisperCount(), 0, "kein nc !/co !/ll normal")
+   eq(count(".playerbots bot self"), 1, "der Umschalter wurde gesendet")
+end)
+
+test("Halt: /bp info und die Einstellungsseite nennen den Halter, /bp freigeben hebt ihn auf", function()
+   boot()
+   Botpad.Bot.Hold("Fishing Buddy")
+   W.messages = {}
+   SlashCmdList["BOTPAD"]("info")
+   check(warned("gehalten von Fishing Buddy"), "/bp info")
+   check(Botpad.Options.status:GetText():find("gehalten von Fishing Buddy", 1, true), "Einstellungsseite")
+   W.messages = {}
+   SlashCmdList["BOTPAD"]("freigeben")
+   check(not Botpad.Bot.IsHeld(), "freigegeben")
+   check(warned("Halt aufgehoben"), "Meldung")
+   check(not Botpad.Options.status:GetText():find("gehalten", 1, true), "Einstellungsseite aktualisiert")
+   W.messages = {}
+   SlashCmdList["BOTPAD"]("freigeben")
+   check(warned("niemand"), "ohne Halt: sagt es")
+end)
+
+test("kein Modus nimmt dem Bot die Strategie 'chat' (sie nimmt alle Chatbefehle an)", function()
+   boot()
+   for _, m in ipairs(Botpad.Bot.Modes) do
+      check(not m.nc:find("-chat", 1, true), "nc ohne -chat: " .. m.key)
+      check(not m.co:find("-chat", 1, true), "co ohne -chat: " .. m.key)
+      check(m.nc:find("+chat", 1, true), "nc mit +chat: " .. m.key)
+   end
+end)
+
+test("Version 1.3 in Code und TOC", function()
+   boot()
+   eq(Botpad.VERSION, "1.3", "BP.VERSION")
+   local f = io.open("Botpad.toc", "r")
+   local toc = f:read("*a")
+   f:close()
+   check(toc:find("## Version: 1.3", 1, true), "TOC")
 end)
 
 print(string.format("\n%d Pruefungen, %d Fehler", passes, failures))

@@ -33,7 +33,9 @@ B.Modes = {
       key  = "minimal",
       name = "Minimal",
       desc = "Kein Sammeln, kein Looten.",
-      nc   = "+bdps,-chat,+default,+dps assist,-duel,-emote,+follow,+food,-gather,-loot,+mount,+nc,+pet,+pvp,+quest,+heal,+cure",
+      -- "chat" ist die Strategie, die Chatbefehle ueberhaupt annimmt (nc, co, ll, ...).
+      -- Mit "-chat" waere der Bot danach taub und die folgenden Befehle verpufften.
+      nc   = "+bdps,+chat,+default,+dps assist,-duel,-emote,+follow,+food,-gather,-loot,+mount,+nc,+pet,+pvp,+quest,+heal,+cure",
       co   = "+aoe,+avoid aoe,+bdps,+bm,+cast time,+cc,+chat,+default,+dps assist,+duel,+formation,+potions,+racials,+healer dps,+cure",
       -- "ll" kennt nur all/*, gray/g und disenchant; jeder andere Wert wird zu
       -- "normal" (LootStrategyValue::instance in mod-playerbots). Das Looten
@@ -147,6 +149,43 @@ end
 
 B.running = nil           -- nil = unbekannt, true/false = bestaetigt
 B.disabled = false        -- true: ein anderes Addon (AutoTravel) steuert den Bot
+B.holders = {}            -- Addons, die die Strategien gerade selbst setzen (Hold/Release)
+
+-- Ein anderes Addon (z. B. Fishing Buddy) setzt die Strategien selbst und will nicht,
+-- dass Botpad bei der naechsten Einschaltmeldung seinen Modus ("nc !", "co !", ...)
+-- darueberlegt. Hold(name) bittet Botpad darum, Release(name) hebt es auf. Der Modus
+-- bleibt gespeichert und wird nach Release beim naechsten Einschalten wieder angewandt.
+function B.IsHeld()
+   return next(B.holders) ~= nil
+end
+
+function B.HolderNames()
+   local names = {}
+   for name in pairs(B.holders) do names[#names + 1] = name end
+   table.sort(names)
+   return table.concat(names, ", ")
+end
+
+local function HoldChanged()
+   if BP.UI then BP.UI.Update() end
+   if BP.Options then BP.Options.Refresh() end
+end
+
+function B.Hold(owner)
+   B.holders[tostring(owner or "?")] = true
+   HoldChanged()
+end
+
+function B.Release(owner)
+   B.holders[tostring(owner or "?")] = nil
+   HoldChanged()
+end
+
+-- Notausgang, falls ein Addon seinen Halt nie aufhebt (/bp freigeben)
+function B.ClearHolds()
+   B.holders = {}
+   HoldChanged()
+end
 
 local watchUntil = 0      -- Frist fuer die Bestaetigung; VOR den Funktionen, die sie lesen
 
@@ -219,7 +258,7 @@ function B.OnSystemMessage(msg)
 
    if MatchAny(low, ON_PATTERNS) then
       B.running = true
-      if not Reconcile() and not B.disabled then
+      if not Reconcile() and not B.disabled and not B.IsHeld() then
          B.ApplyMode(true)       -- Strategien passend zum Modus setzen
       end
       if BP.UI then BP.UI.Update() end
@@ -293,7 +332,7 @@ end
 -- ---------------------------------------------------------------------------
 
 function B.ApplyMode(silent)
-   if B.disabled then return end
+   if B.disabled or B.IsHeld() then return end
    local m = B.Current()
    B.ResetStrategies()
    B.Whisper("nc " .. m.nc)
@@ -314,8 +353,14 @@ function B.SetMode(key)
    end
    BP.Set("Mode", key)
    local m = B.Current()
-   BP.Print("Modus: |cffffffff" .. m.name .. "|r - " .. m.desc)
-   if B.running then B.ApplyMode(true) end
+   if B.IsHeld() then
+      -- gespeichert, aber der Bot bleibt, wie das andere Addon ihn eingestellt hat
+      BP.Print("Modus gespeichert: |cffffffff" .. m.name .. "|r - gilt nicht, solange " ..
+               B.HolderNames() .. " die Strategien setzt.")
+   else
+      BP.Print("Modus: |cffffffff" .. m.name .. "|r - " .. m.desc)
+      if B.running then B.ApplyMode(true) end
+   end
    if BP.UI then BP.UI.Update() end
    if BP.Options then BP.Options.Refresh() end
    return true
@@ -324,7 +369,7 @@ end
 -- Beim Ausschalten die Strategien zuruecksetzen, damit der Charakter nicht
 -- mit halb gesetzten Botstrategien zurueckbleibt.
 function B.ResetStrategies()
-   if B.disabled then return end      -- AutoTravel steuert die Strategien
+   if B.disabled or B.IsHeld() then return end   -- AutoTravel / ein Halt steuert die Strategien
    B.Whisper("ll normal")
    B.Whisper("nc !")
    B.Whisper("co !")
