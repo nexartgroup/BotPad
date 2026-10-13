@@ -166,19 +166,37 @@ function B.HolderNames()
    return table.concat(names, ", ")
 end
 
+-- Ein Fehler beim Neuzeichnen darf Hold/Release des anderen Addons nicht zum Absturz
+-- bringen (die haengen Start und Stopp dort dran).
 local function HoldChanged()
-   if BP.UI then BP.UI.Update() end
-   if BP.Options then BP.Options.Refresh() end
+   if BP.UI then pcall(BP.UI.Update) end
+   if BP.Options then pcall(BP.Options.Refresh) end
 end
 
 function B.Hold(owner)
    B.holders[tostring(owner or "?")] = true
+   -- Was Botpad selbst noch an den Bot schicken wollte (ein Modus in der Warteschlange),
+   -- wuerde sonst nach der Strategie des anderen Addons ankommen und sie ueberschreiben.
+   B.DropWhispers()
    HoldChanged()
 end
 
 function B.Release(owner)
    B.holders[tostring(owner or "?")] = nil
    HoldChanged()
+end
+
+-- Hat der Halt etwas verschluckt, das der Spieler selbst ausgeloest hat (Modus
+-- zuruecksetzen, Einstellungen zuruecksetzen), sagt Botpad das hoechstens einmal je
+-- Minute. Die Einschaltmeldung des Servers beim Start des anderen Addons ist der
+-- erwartete Fall und bleibt still.
+local heldNotedAt = nil
+function B.NoteHeld()
+   local now = GetTime()
+   if heldNotedAt and (now - heldNotedAt) < 60 then return end
+   heldNotedAt = now
+   BP.Print("Der Modus wird nicht auf den Bot angewandt, solange " .. B.HolderNames() ..
+            " die Strategien setzt (/bp freigeben hebt das auf).")
 end
 
 -- Notausgang, falls ein Addon seinen Halt nie aufhebt (/bp freigeben)
@@ -260,7 +278,7 @@ function B.OnSystemMessage(msg)
       B.running = true
       if not Reconcile() and not B.disabled and not B.IsHeld() then
          B.ApplyMode(true)       -- Strategien passend zum Modus setzen
-      end
+      end       -- (gehalten: still -- das andere Addon hat selbst eingeschaltet)
       if BP.UI then BP.UI.Update() end
       return true
    end
@@ -322,7 +340,10 @@ function B.Toggle()
    -- zeigt der Knopf "BOT EIN", gewuenscht ist also "an".
    local want = (B.running ~= true)
    if not want and BP.GetBool("ResetOnStop") then
-      B.ResetStrategies()
+      -- Wer den Bot von Hand ausschaltet, will ihn auch zurueckgesetzt haben: sonst
+      -- bliebe die Strategie des anderen Addons beim Bot gespeichert (der Server
+      -- laedt sie beim naechsten Einschalten wieder).
+      B.ResetStrategies(true)
    end
    SendToggle(want, false)
 end
@@ -332,7 +353,11 @@ end
 -- ---------------------------------------------------------------------------
 
 function B.ApplyMode(silent)
-   if B.disabled or B.IsHeld() then return end
+   if B.disabled then return end
+   if B.IsHeld() then
+      B.NoteHeld()
+      return
+   end
    local m = B.Current()
    B.ResetStrategies()
    B.Whisper("nc " .. m.nc)
@@ -356,7 +381,8 @@ function B.SetMode(key)
    if B.IsHeld() then
       -- gespeichert, aber der Bot bleibt, wie das andere Addon ihn eingestellt hat
       BP.Print("Modus gespeichert: |cffffffff" .. m.name .. "|r - gilt nicht, solange " ..
-               B.HolderNames() .. " die Strategien setzt.")
+               B.HolderNames() .. " die Strategien setzt; danach beim naechsten Einschalten " ..
+               "(/bp freigeben hebt den Halt auf).")
    else
       BP.Print("Modus: |cffffffff" .. m.name .. "|r - " .. m.desc)
       if B.running then B.ApplyMode(true) end
@@ -368,8 +394,9 @@ end
 
 -- Beim Ausschalten die Strategien zuruecksetzen, damit der Charakter nicht
 -- mit halb gesetzten Botstrategien zurueckbleibt.
-function B.ResetStrategies()
-   if B.disabled or B.IsHeld() then return end   -- AutoTravel / ein Halt steuert die Strategien
+function B.ResetStrategies(force)
+   if B.disabled then return end                 -- AutoTravel steuert die Strategien
+   if B.IsHeld() and not force then return end   -- ein Halt auch (ausser beim Ausschalten von Hand)
    B.Whisper("ll normal")
    B.Whisper("nc !")
    B.Whisper("co !")

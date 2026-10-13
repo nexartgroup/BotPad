@@ -1166,9 +1166,10 @@ test("Halt: Modus waehlen speichert nur und sagt, warum nichts gesendet wird", f
    W.Advance(5)
    eq(whisperCount(), 0, "nichts an den Bot")
    check(warned("gilt nicht, solange Fishing Buddy"), "Hinweis mit dem Namen des Halters")
+   check(warned("/bp freigeben"), "Hinweis auf den Ausweg")
 end)
 
-test("Halt: Ausschalten setzt die Strategien nicht zurueck, der Umschalter geht trotzdem hinaus", function()
+test("Halt: BOT AUS von Hand setzt die Strategien trotzdem zurueck (sonst bleibt die fremde Strategie gespeichert)", function()
    boot()
    W.ServerLine("SelfBot is now active.")
    W.Advance(5)
@@ -1176,8 +1177,74 @@ test("Halt: Ausschalten setzt die Strategien nicht zurueck, der Umschalter geht 
    Botpad.Bot.Hold("Fishing Buddy")
    Botpad.Bot.Toggle()
    W.Advance(5)
-   eq(whisperCount(), 0, "kein nc !/co !/ll normal")
+   eq(whisperCount(), 3, "ll normal, nc !, co !")
    eq(count(".playerbots bot self"), 1, "der Umschalter wurde gesendet")
+end)
+
+test("Halt: BOT AUS ohne 'Strategien zuruecksetzen' sendet nur den Umschalter", function()
+   boot()
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   BotpadDB.ResetOnStop = 0
+   W.ClearSent()
+   Botpad.Bot.Hold("Fishing Buddy")
+   Botpad.Bot.Toggle()
+   W.Advance(5)
+   eq(whisperCount(), 0, "keine Rueckstellung")
+   eq(count(".playerbots bot self"), 1, "der Umschalter wurde gesendet")
+end)
+
+test("Halt: ResetSettings mit geaendertem Modus sendet nichts und sagt es einmal je Minute", function()
+   boot()
+   Botpad.Bot.SetMode("grind")
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   W.ClearSent()
+   W.messages = {}
+   Botpad.Bot.Hold("Fishing Buddy")
+   Botpad.ResetSettings()
+   W.Advance(5)
+   eq(whisperCount(), 0, "nichts an den Bot")
+   check(warned("nicht auf den Bot angewandt"), "Hinweis")
+   local n = #W.messages
+   Botpad.Bot.SetMode("grind")
+   Botpad.ResetSettings()
+   local again = 0
+   for i = n + 1, #W.messages do if W.messages[i]:find("nicht auf den Bot angewandt", 1, true) then again = again + 1 end end
+   eq(again, 0, "binnen einer Minute nicht noch einmal")
+end)
+
+test("Halt: die Einschaltmeldung des anderen Addons bleibt still", function()
+   boot()
+   W.messages = {}
+   Botpad.Bot.Hold("Fishing Buddy")
+   W.ServerLine("SelfBot is now active.")
+   W.Advance(5)
+   check(not warned("nicht auf den Bot angewandt"), "keine Botpad-Meldung beim Einschalten")
+end)
+
+test("Halt: wartende Botpad-Fluesterbefehle werden verworfen", function()
+   boot()
+   W.ServerLine("SelfBot is now active.")          -- Botpad reiht seinen Modus ein
+   local before = whisperCount()
+   Botpad.Bot.Hold("Fishing Buddy")
+   W.Advance(20)
+   eq(whisperCount(), before, "nach dem Halt kommt nichts mehr nach")
+   check(before < 6, "Voraussetzung: beim Halt war noch etwas in der Warteschlange")
+end)
+
+test("Halt: ein Fehler beim Neuzeichnen bringt Hold/Release nicht zum Absturz", function()
+   boot()
+   local ui, opts = Botpad.UI.Update, Botpad.Options.Refresh
+   Botpad.UI.Update = function() error("kaputt") end
+   Botpad.Options.Refresh = function() error("kaputt") end
+   local ok1 = pcall(Botpad.Bot.Hold, "Fishing Buddy")
+   check(ok1, "Hold")
+   check(Botpad.Bot.IsHeld(), "gehalten")
+   local ok2 = pcall(Botpad.Bot.Release, "Fishing Buddy")
+   check(ok2, "Release")
+   check(not Botpad.Bot.IsHeld(), "freigegeben")
+   Botpad.UI.Update, Botpad.Options.Refresh = ui, opts
 end)
 
 test("Halt: /bp info und die Einstellungsseite nennen den Halter, /bp freigeben hebt ihn auf", function()
