@@ -115,6 +115,14 @@ or:
 
 Running the command without arguments toggles the BotPad window.
 
+### Let another addon set the strategies
+
+```text
+/bp freigeben
+```
+
+Other addons (Fishing Buddy) can hold BotPad's mode back while they run — see "Changes in 1.3". If one never lets go (it crashed), this clears the hold; `/bp info` shows who is holding.
+
 ### Open the settings
 
 ```text
@@ -379,6 +387,12 @@ You can also enable debugging:
 * **`/bp befehl` and the settings field refuse a command without a leading dot** (`.` or `!` followed by the command name), which the client would send as ordinary chat. A saved command without a valid prefix is replaced by the default on load.
 * **Minimap button** can be hidden (`MinimapButton`, `/bp knopf`); Shift+click on it opens the settings, right click toggles the window, left click toggles the bot.
 * **`/bp standard`** also re-applies the default mode to a running bot.
+
+## Changes in 1.3
+
+* **Hold interface for other addons.** BotPad applies its mode (`nc !`, `co !`, the mode's strategies) on **every** "SelfBot is now active." message, no matter who switched the bot on. An addon that sets its own strategies (Fishing Buddy's auto fishing sets `master fishing`) would have that wiped half a second later. It can now ask BotPad to stand back: `Botpad.Bot.Hold("My Addon")` before it switches the bot on and `Botpad.Bot.Release("My Addon")` when it is done. While held, BotPad does not apply its mode, drops whatever strategy commands it still had queued, and only *stores* a mode you pick (it says so, and that the mode applies at the next switch-on after the hold ends). Switching the bot off by hand (BOT AUS) still resets the strategies if "reset strategies on stop" is on, so the other addon's strategy is not left stored on the server — best effort: a bot that is waiting for a fishing bobber reads its commands only seconds later, and the switch-off removes it before that; Fishing Buddy notes the leftover and cleans it up the next time the bot is switched on. If a reset of the settings would have changed the mode, BotPad says that it did not apply it (at most once a minute); the other addon's own switch-on message stays silent. `/bp info` and the settings page show who holds; `/bp freigeben` clears a hold that was never released. Fishing Buddy 0.9.10 uses this.
+* **The mode is applied when the bot listens.** A freshly switched-on self bot ignores chat commands for about ten seconds and then works off everything that arrived in one go; the `nc` and `co` triggers keep only the *last* parameter of such a batch, so `nc !` followed by the mode's `nc ...` left only the second. BotPad now waits 12.5 s after "SelfBot is now active." before it resets and applies the mode (a switch-off or a hold during that time cancels it). Changing the mode on a bot that is already listening is applied at once, as before.
+* **Minimal mode no longer removes the `chat` strategy.** In mod-playerbots `chat` is the strategy that accepts chat commands; with `-chat` the bot was deaf to everything BotPad (and every other addon) whispered afterwards in the non-combat state, including the rest of the mode itself.
 
 ## Compatibility
 

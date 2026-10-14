@@ -33,7 +33,9 @@ B.Modes = {
       key  = "minimal",
       name = "Minimal",
       desc = "Kein Sammeln, kein Looten.",
-      nc   = "+bdps,-chat,+default,+dps assist,-duel,-emote,+follow,+food,-gather,-loot,+mount,+nc,+pet,+pvp,+quest,+heal,+cure",
+      -- "chat" ist die Strategie, die Chatbefehle ueberhaupt annimmt (nc, co, ll, ...).
+      -- Mit "-chat" waere der Bot danach taub und die folgenden Befehle verpufften.
+      nc   = "+bdps,+chat,+default,+dps assist,-duel,-emote,+follow,+food,-gather,-loot,+mount,+nc,+pet,+pvp,+quest,+heal,+cure",
       co   = "+aoe,+avoid aoe,+bdps,+bm,+cast time,+cc,+chat,+default,+dps assist,+duel,+formation,+potions,+racials,+healer dps,+cure",
       -- "ll" kennt nur all/*, gray/g und disenchant; jeder andere Wert wird zu
       -- "normal" (LootStrategyValue::instance in mod-playerbots). Das Looten
@@ -147,8 +149,71 @@ end
 
 B.running = nil           -- nil = unbekannt, true/false = bestaetigt
 B.disabled = false        -- true: ein anderes Addon (AutoTravel) steuert den Bot
+B.holders = {}            -- Addons, die die Strategien gerade selbst setzen (Hold/Release)
+
+-- Ein anderes Addon (z. B. Fishing Buddy) setzt die Strategien selbst und will nicht,
+-- dass Botpad bei der naechsten Einschaltmeldung seinen Modus ("nc !", "co !", ...)
+-- darueberlegt. Hold(name) bittet Botpad darum, Release(name) hebt es auf. Der Modus
+-- bleibt gespeichert und wird nach Release beim naechsten Einschalten wieder angewandt.
+function B.IsHeld()
+   return next(B.holders) ~= nil
+end
+
+function B.HolderNames()
+   local names = {}
+   for name in pairs(B.holders) do names[#names + 1] = name end
+   table.sort(names)
+   return table.concat(names, ", ")
+end
+
+-- Ein Fehler beim Neuzeichnen darf Hold/Release des anderen Addons nicht zum Absturz
+-- bringen (die haengen Start und Stopp dort dran).
+local function HoldChanged()
+   if BP.UI then pcall(BP.UI.Update) end
+   if BP.Options then pcall(BP.Options.Refresh) end
+end
+
+function B.Hold(owner)
+   B.holders[tostring(owner or "?")] = true
+   -- Was Botpad selbst noch an den Bot schicken wollte (ein Modus in der Warteschlange),
+   -- wuerde sonst nach der Strategie des anderen Addons ankommen und sie ueberschreiben.
+   B.DropWhispers()
+   HoldChanged()
+end
+
+function B.Release(owner)
+   B.holders[tostring(owner or "?")] = nil
+   HoldChanged()
+end
+
+-- Hat der Halt etwas verschluckt, das der Spieler selbst ausgeloest hat (Modus
+-- zuruecksetzen, Einstellungen zuruecksetzen), sagt Botpad das hoechstens einmal je
+-- Minute. Die Einschaltmeldung des Servers beim Start des anderen Addons ist der
+-- erwartete Fall und bleibt still.
+local heldNotedAt = nil
+function B.NoteHeld()
+   local now = GetTime()
+   if heldNotedAt and (now - heldNotedAt) < 60 then return end
+   heldNotedAt = now
+   BP.Print("Der Modus wird nicht auf den Bot angewandt, solange " .. B.HolderNames() ..
+            " die Strategien setzt (/bp freigeben hebt das auf).")
+end
+
+-- Notausgang, falls ein Addon seinen Halt nie aufhebt (/bp freigeben)
+function B.ClearHolds()
+   B.holders = {}
+   HoldChanged()
+end
 
 local watchUntil = 0      -- Frist fuer die Bestaetigung; VOR den Funktionen, die sie lesen
+
+-- Ein frisch eingeschalteter Selbstbot hoert etwa 10 s lang auf keinen Chatbefehl (sein erster
+-- KI-Takt ist ein "minimaler", danach pausiert er: PlayerbotAI PassiveDelay). Was in dieser Zeit
+-- ankommt, arbeitet er in EINEM Takt ab -- und der "nc"- wie der "co"-Ausloeser behaelt nur den
+-- LETZTEN Parameter. "nc !" gefolgt vom Modus waere also verloren. Deshalb wird der Modus erst
+-- angewandt, wenn der Bot zuhoert.
+local ACTIVATION_DELAY = 12.5
+local applyAt = nil
 
 -- Die Meldungen von mod-playerbots haben sich geaendert. Heute (PlayerbotMgr.cpp,
 -- Befehl "self"):
@@ -207,9 +272,9 @@ function B.OnSystemMessage(msg)
       local mine = (watchUntil ~= 0)
       watchUntil = 0
       B.DropWhispers()
-      -- Mit AutoTravel meldet dieses die Verweigerung selbst; Botpad nur, wenn es
-      -- gerade selbst umgeschaltet hat.
-      if mine or not BP.autoTravel then
+      -- Mit AutoTravel meldet dieses die Verweigerung selbst, mit einem Halter (Fishing
+      -- Buddy) dieser; Botpad nur, wenn es gerade selbst umgeschaltet hat.
+      if mine or (not BP.autoTravel and not B.IsHeld()) then
          BP.Warn("Der Server verweigert den Selbstmodus: " .. msg ..
                  " (AiPlayerbot.SelfBotLevel in der Serverkonfiguration)")
       end
@@ -219,14 +284,16 @@ function B.OnSystemMessage(msg)
 
    if MatchAny(low, ON_PATTERNS) then
       B.running = true
-      if not Reconcile() and not B.disabled then
-         B.ApplyMode(true)       -- Strategien passend zum Modus setzen
-      end
+      applyAt = nil
+      if not Reconcile() and not B.disabled and not B.IsHeld() then
+         applyAt = GetTime() + ACTIVATION_DELAY      -- Strategien passend zum Modus setzen, sobald der Bot zuhoert
+      end       -- (gehalten: still -- das andere Addon hat selbst eingeschaltet)
       if BP.UI then BP.UI.Update() end
       return true
    end
    if MatchAny(low, OFF_PATTERNS) then
       B.running = false
+      applyAt = nil
       Reconcile()
       if BP.UI then BP.UI.Update() end
       return true
@@ -247,6 +314,10 @@ end
 local watchdog = CreateFrame("Frame")
 
 watchdog:SetScript("OnUpdate", function()
+   if applyAt and GetTime() >= applyAt then
+      applyAt = nil
+      if B.running and not B.disabled and not B.IsHeld() then B.ApplyMode(true) end
+   end
    if watchUntil == 0 then return end
    if GetTime() < watchUntil then return end
    watchUntil = 0
@@ -283,7 +354,12 @@ function B.Toggle()
    -- zeigt der Knopf "BOT EIN", gewuenscht ist also "an".
    local want = (B.running ~= true)
    if not want and BP.GetBool("ResetOnStop") then
-      B.ResetStrategies()
+      -- Wer den Bot von Hand ausschaltet, will ihn auch zurueckgesetzt haben: sonst
+      -- bliebe die Strategie des anderen Addons beim Bot gespeichert (der Server
+      -- laedt sie beim naechsten Einschalten wieder). Das gelingt nur nach Kraeften:
+      -- ein Bot, der gerade auf einen Schwimmer wartet, liest seine Befehle erst
+      -- nach Sekunden, und der Umschalter baut ihn vorher ab.
+      B.ResetStrategies(true)
    end
    SendToggle(want, false)
 end
@@ -294,6 +370,10 @@ end
 
 function B.ApplyMode(silent)
    if B.disabled then return end
+   if B.IsHeld() then
+      B.NoteHeld()
+      return
+   end
    local m = B.Current()
    B.ResetStrategies()
    B.Whisper("nc " .. m.nc)
@@ -314,8 +394,15 @@ function B.SetMode(key)
    end
    BP.Set("Mode", key)
    local m = B.Current()
-   BP.Print("Modus: |cffffffff" .. m.name .. "|r - " .. m.desc)
-   if B.running then B.ApplyMode(true) end
+   if B.IsHeld() then
+      -- gespeichert, aber der Bot bleibt, wie das andere Addon ihn eingestellt hat
+      BP.Print("Modus gespeichert: |cffffffff" .. m.name .. "|r - gilt nicht, solange " ..
+               B.HolderNames() .. " die Strategien setzt; danach beim naechsten Einschalten " ..
+               "(/bp freigeben hebt den Halt auf).")
+   else
+      BP.Print("Modus: |cffffffff" .. m.name .. "|r - " .. m.desc)
+      if B.running then B.ApplyMode(true) end
+   end
    if BP.UI then BP.UI.Update() end
    if BP.Options then BP.Options.Refresh() end
    return true
@@ -323,8 +410,9 @@ end
 
 -- Beim Ausschalten die Strategien zuruecksetzen, damit der Charakter nicht
 -- mit halb gesetzten Botstrategien zurueckbleibt.
-function B.ResetStrategies()
-   if B.disabled then return end      -- AutoTravel steuert die Strategien
+function B.ResetStrategies(force)
+   if B.disabled then return end                 -- AutoTravel steuert die Strategien
+   if B.IsHeld() and not force then return end   -- ein Halt auch (ausser beim Ausschalten von Hand)
    B.Whisper("ll normal")
    B.Whisper("nc !")
    B.Whisper("co !")

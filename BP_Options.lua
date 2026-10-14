@@ -149,6 +149,10 @@ local function StatusText()
    end
 
    lines[#lines + 1] = "Selbstmodus: " .. BP.Bot.StatusText()
+   if BP.Bot.IsHeld() then
+      lines[#lines + 1] = "Strategien: |cffe8c44agehalten von " .. BP.Bot.HolderNames() ..
+                          "|r  -  der Modus wird solange nicht auf den Bot angewandt."
+   end
    lines[#lines + 1] = "Carbonite: " .. (BP.Carb.IsAvailable() and "|cff53d17agefunden|r" or "|cffe8654anicht gefunden|r")
    return table.concat(lines, "\n")
 end

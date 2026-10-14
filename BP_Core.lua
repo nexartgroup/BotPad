@@ -16,7 +16,7 @@
 Botpad = Botpad or {}
 local BP = Botpad
 
-BP.VERSION = "1.2"
+BP.VERSION = "1.3"
 local PREFIX = "|cff5ab0e8Botpad|r: "
 
 local DEFAULTS = {
@@ -458,6 +458,14 @@ SlashCmdList["BOTPAD"] = function(input)
    elseif cmd == "optionen" or cmd == "options" or cmd == "einstellungen" then
       if BP.Options then BP.Options.Open() end
 
+   elseif cmd == "freigeben" or cmd == "release" then
+      if BP.Bot.IsHeld() then
+         BP.Print("Halt aufgehoben (war: " .. BP.Bot.HolderNames() .. ").")
+         BP.Bot.ClearHolds()
+      else
+         BP.Print("Es haelt niemand die Strategien.")
+      end
+
    elseif cmd == "standard" or cmd == "reset" then
       if BP.Options and BP.Options.ResetAll then
          BP.Options.ResetAll()
@@ -479,6 +487,9 @@ SlashCmdList["BOTPAD"] = function(input)
                (s.state == "READY" and (" (Version " .. s.version .. ", Stufe " .. s.sec ..
                                         ", Teleport " .. (TeleportAllowed() and "erlaubt" or "nicht erlaubt") .. ")") or ""))
       BP.Print("Selbstmodus: " .. BP.Bot.StatusText() .. "  |  Befehl: " .. tostring(BP.Get("SelfCommand")))
+      if BP.Bot.IsHeld() then
+         BP.Print("Strategien: gehalten von " .. BP.Bot.HolderNames() .. " (/bp freigeben hebt das auf)")
+      end
       BP.Print("Carbonite: " .. (BP.Carb.IsAvailable() and "gefunden" or "nicht gefunden"))
 
    else
@@ -497,6 +508,7 @@ SlashCmdList["BOTPAD"] = function(input)
          "/bp optionen       Einstellungsseite (Interface -> AddOns -> Botpad)",
          "/bp standard       Einstellungen auf die Voreinstellung",
          "/bp info           Version, Verbindung, Berechtigung",
+         "/bp freigeben      Halt eines anderen Addons (z. B. Fishing Buddy) aufheben",
          "/bp debug          gesendete Befehle anzeigen",
       }
       for _, x in ipairs(l) do DEFAULT_CHAT_FRAME:AddMessage("   " .. x) end
